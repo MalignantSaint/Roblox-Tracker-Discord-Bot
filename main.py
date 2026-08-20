@@ -42,7 +42,6 @@ DISCORD_ROLE_ID = 1539998360046407801
 TARGET_CHANNEL_ID = 1301548308610940970
 
 TRACKED_USERS = {
-    
     3655587119: {"place_id": 110823256031006, "faction": "The Crimson Alliance"},
     1304868946: {"place_id": 110823256031006, "faction": "The Crimson Alliance"},
     8309322015: {"place_id": 110823256031006, "faction": "The Lapis Fleet"},
