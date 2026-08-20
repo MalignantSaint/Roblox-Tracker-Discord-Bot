@@ -42,23 +42,24 @@ DISCORD_ROLE_ID = 1539998360046407801
 TARGET_CHANNEL_ID = 1301548308610940970
 
 TRACKED_USERS = {
-    6054221747: {"place_id": 110823256031006, "faction": "The Lapis Fleet", "game_name": "Pirate Mayhem"},
-    3655587119: {"place_id": 110823256031006, "faction": "The Crimson Alliance", "game_name": "Pirate Mayhem"},
-    1304868946: {"place_id": 110823256031006, "faction": "The Crimson Alliance", "game_name": "Pirate Mayhem"},
-    8309322015: {"place_id": 110823256031006, "faction": "The Lapis Fleet", "game_name": "Pirate Mayhem"},
-    4977310930: {"place_id": 110823256031006, "faction": "The Lapis Fleet", "game_name": "Pirate Mayhem"},
+    6054221747: {"place_id": 110823256031006, "faction": "The Lapis Fleet"},
+    3655587119: {"place_id": 110823256031006, "faction": "The Crimson Alliance"},
+    1304868946: {"place_id": 110823256031006, "faction": "The Crimson Alliance"},
+    8309322015: {"place_id": 110823256031006, "faction": "The Lapis Fleet"},
+    4977310930: {"place_id": 110823256031006, "faction": "The Lapis Fleet"},
 }
 
 already_playing_state = {user_id: False for user_id in TRACKED_USERS}
 username_cache = {}
+game_name_cache = {}
 
 # === DISCORD BOT SETUP ===
 class RobloxTrackerBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
-        intents.message_content = True  # Enable message content intent
+        intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
-        
+
     async def setup_hook(self):
         await self.tree.sync()
         print("[INFO] Slash commands synchronized globally.")
@@ -79,6 +80,21 @@ class RobloxTrackerBot(commands.Bot):
             print(f"Error fetching username for {user_id}: {e}")
         return str(user_id)
 
+    async def get_game_name(self, session, place_id):
+        if place_id in game_name_cache:
+            return game_name_cache[place_id]
+        try:
+            url = f"https://economy.roblox.com/v1/assets/{place_id}/details"
+            async with session.get(url, timeout=10) as res:
+                if res.status == 200:
+                    data = await res.json()
+                    name = data.get("Name", f"Place {place_id}")
+                    game_name_cache[place_id] = name
+                    return name
+        except Exception as e:
+            print(f"Error fetching game name for Place ID {place_id}: {e}")
+        return f"Place {place_id}"
+
     @tasks.loop(seconds=60)
     async def monitor_loop(self):
         channel = self.get_channel(TARGET_CHANNEL_ID)
@@ -90,7 +106,7 @@ class RobloxTrackerBot(commands.Bot):
                 for user_id, user_data in list(TRACKED_USERS.items()):
                     target_place_id = user_data["place_id"]
                     faction = user_data["faction"]
-                    game_name = user_data.get("game_name", "ERROR_GAME_NAME_NOT_FOUND")
+                    game_name = user_data.get("game_name") or await self.get_game_name(session, target_place_id)
                     username = await self.get_username(session, user_id)
                     
                     presence_url = "https://presence.roblox.com/v1/presence/users"
@@ -159,26 +175,33 @@ bot = RobloxTrackerBot()
 @app_commands.describe(
     user_id="The numeric Roblox User ID",
     faction="Faction name",
-    game_name="Name of the game",
     place_id="Target Roblox Place ID"
 )
 async def track_user(
     interaction: discord.Interaction, 
     user_id: int, 
     faction: str = "Unassigned", 
-    game_name: str = "Pirate Mayhem",
     place_id: int = 110823256031006
 ):
-    TRACKED_USERS[user_id] = {"place_id": place_id, "faction": faction, "game_name": game_name}
+    await interaction.response.defer(ephemeral=True)
+
+    async with aiohttp.ClientSession() as session:
+        game_name = await bot.get_game_name(session, place_id)
+
+    TRACKED_USERS[user_id] = {
+        "place_id": place_id, 
+        "faction": faction, 
+        "game_name": game_name
+    }
     already_playing_state[user_id] = False
     
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.watching, 
-            name=f"{len(TRACKED_USERS)} Pirate Mayhem players"
+            name=f"{len(TRACKED_USERS)} Roblox players"
         )
     )
-    await interaction.response.send_message(
+    await interaction.followup.send(
         f"✅ Now tracking user ID `{user_id}` (**{faction}**) for **{game_name}**.",
         ephemeral=True
     )
@@ -193,7 +216,7 @@ async def untrack_user(interaction: discord.Interaction, user_id: int):
         await bot.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching, 
-                name=f"{len(TRACKED_USERS)} Pirate Mayhem players"
+                name=f"{len(TRACKED_USERS)} Roblox players"
             )
         )
         await interaction.response.send_message(f"❌ Stopped tracking user ID `{user_id}`.", ephemeral=True)
@@ -212,7 +235,7 @@ async def list_tracked(interaction: discord.Interaction):
         lines = []
         for uid, data in TRACKED_USERS.items():
             username = await bot.get_username(session, uid)
-            game_name = data.get("game_name", "Pirate Mayhem")
+            game_name = data.get("game_name") or await bot.get_game_name(session, data["place_id"])
             lines.append(
                 f"• **{username}** (`{uid}`) | **Faction:** {data['faction']} | **Game:** **{game_name}**"
             )
