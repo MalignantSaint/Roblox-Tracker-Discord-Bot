@@ -202,12 +202,20 @@ async def list_tracked(interaction: discord.Interaction):
         await interaction.response.send_message("No users are currently being tracked.", ephemeral=True)
         return
 
-    lines = [f"• **ID:** `{uid}` | **Faction:** {data['faction']} | **Place:** `{data['place_id']}`" for uid, data in TRACKED_USERS.items()]
-    summary = "\n".join(lines)
-    
-    embed = discord.Embed(title="📋 Tracked Roblox Users", description=summary, color=3447003)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    # Defer response to allow time for API requests
+    await interaction.response.defer(ephemeral=True)
 
+    async with aiohttp.ClientSession() as session:
+        lines = []
+        for uid, data in TRACKED_USERS.items():
+            username = await bot.get_username(session, uid)
+            lines.append(
+                f"• **{username}** (`{uid}`) | **Faction:** {data['faction']} | **Place:** `{data['place_id']}`"
+            )
+
+    summary = "\n".join(lines)
+    embed = discord.Embed(title="📋 Tracked Roblox Users", description=summary, color=3447003)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 if __name__ == "__main__":
     Thread(target=run_web_server, daemon=True).start()
     bot.run("MTUzOTg0MjEyNjAzOTM1OTQ4OA.GMQa_G.kBexGt4556mlJLQh2Y9P6GrLEOA4Kp2k4oVebs")
