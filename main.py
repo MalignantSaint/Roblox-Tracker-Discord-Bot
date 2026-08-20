@@ -222,4 +222,4 @@ async def list_tracked(interaction: discord.Interaction):
 
 if __name__ == "__main__":
     Thread(target=run_web_server, daemon=True).start()
-    bot.run("YOUR_DISCORD_BOT_TOKEN_HERE")
+    bot.run("MTUzOTg0MjEyNjAzOTM1OTQ4OA.GMQa_G.kBexGt4556mlJLQh2Y9P6GrLEOA4Kp2k4oVebs")
