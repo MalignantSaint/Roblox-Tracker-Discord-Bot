@@ -89,7 +89,7 @@ class RobloxTrackerBot(commands.Bot):
                 for user_id, user_data in list(TRACKED_USERS.items()):
                     target_place_id = user_data["place_id"]
                     faction = user_data["faction"]
-                    game_name = user_data.get("game_name", "Pirate Mayhem")
+                    game_name = user_data.get("game_name", "ERROR_GAME_NAME_NOT_FOUND")
                     username = await self.get_username(session, user_id)
                     
                     presence_url = "https://presence.roblox.com/v1/presence/users"
