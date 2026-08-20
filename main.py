@@ -1,5 +1,6 @@
 import discord
-from discord.ext import tasks
+from discord import app_commands
+from discord.ext import commands, tasks
 import aiohttp
 import asyncio
 from threading import Thread
@@ -35,10 +36,9 @@ def join():
 def run_web_server():
     app.run(host="0.0.0.0", port=10000)
 
-# === CONFIGURATION ===
+# === CONFIGURATION & DATA STORES ===
 DISCORD_ROLE_ID = 1539998360046407801
-# IMPORTANT: Put the ID of the channel where you want the bot to send messages here!
-TARGET_CHANNEL_ID = 1301548308610940970
+TARGET_CHANNEL_ID = 1301548308610940970  # Replace with your channel ID
 
 TRACKED_USERS = {
     6054221747: {"place_id": 110823256031006, "faction": "The Lapis Fleet"},
@@ -51,14 +51,15 @@ TRACKED_USERS = {
 already_playing_state = {user_id: False for user_id in TRACKED_USERS}
 username_cache = {}
 
-# === DISCORD BOT ===
-class RobloxTrackerBot(discord.Client):
+# === DISCORD BOT SETUP ===
+class RobloxTrackerBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
-        super().__init__(intents=intents)
+        super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
-        # Start the tracking loop once the bot is ready
+        await self.tree.sync()
+        print("[INFO] Slash commands synchronized globally.")
         self.monitor_loop.start()
 
     async def get_username(self, session, user_id):
@@ -80,12 +81,11 @@ class RobloxTrackerBot(discord.Client):
     async def monitor_loop(self):
         channel = self.get_channel(TARGET_CHANNEL_ID)
         if not channel:
-            print("Could not find the target channel. Check TARGET_CHANNEL_ID.")
             return
 
         async with aiohttp.ClientSession() as session:
             try:
-                for user_id, user_data in TRACKED_USERS.items():
+                for user_id, user_data in list(TRACKED_USERS.items()):
                     target_place_id = user_data["place_id"]
                     faction = user_data["faction"]
                     username = await self.get_username(session, user_id)
@@ -109,13 +109,12 @@ class RobloxTrackerBot(discord.Client):
                                         is_playing_target = True
 
                                 if is_playing_target:
-                                    if not already_playing_state[user_id]:
+                                    if not already_playing_state.get(user_id, False):
                                         if game_instance_id:
                                             click_to_join = f"{SERVER_DOMAIN}/join?placeId={target_place_id}&gameInstanceId={game_instance_id}"
                                         else:
                                             click_to_join = f"https://www.roblox.com/games/{target_place_id}"
                                         
-                                        # Create the Discord Embed
                                         embed = discord.Embed(
                                             title="🎮 Join Server",
                                             description=f"**Player:** {username}\n**Faction:** {faction}\n**Place ID:** `{target_place_id}`",
@@ -123,20 +122,18 @@ class RobloxTrackerBot(discord.Client):
                                         )
                                         embed.add_field(name="Direct Join", value=f"[👉 Click Here to Join Game]({click_to_join})")
                                         
-                                        # Send the message
                                         message = await channel.send(
                                             content=f"<@&{DISCORD_ROLE_ID}>! Targeted player **{username}** of **{faction}** is now active in Pirate Mayhem!",
                                             embed=embed
                                         )
                                         
-                                        # Auto-publish (Crosspost) natively!
                                         if channel.is_news():
                                             await message.publish()
                                             print(f"[SUCCESS] Auto-published alert for {username}!")
                                             
                                         already_playing_state[user_id] = True
                                 else:
-                                    if already_playing_state[user_id]:
+                                    if already_playing_state.get(user_id, False):
                                         print(f"User {username} left. Resetting state.")
                                         already_playing_state[user_id] = False
 
@@ -152,11 +149,64 @@ class RobloxTrackerBot(discord.Client):
         await self.wait_until_ready()
         print(f"Bot logged in as {self.user} and monitoring {len(TRACKED_USERS)} users...")
 
-if __name__ == "__main__":
-    # Start Flask Server
-    Thread(target=run_web_server, daemon=True).start()
+bot = RobloxTrackerBot()
+
+# === SLASH COMMANDS ===
+@bot.tree.command(name="track", description="Add or update a Roblox user to track")
+@app_commands.describe(
+    user_id="The numeric Roblox User ID",
+    faction="Faction name",
+    place_id="Target Roblox Place ID"
+)
+async def track_user(
+    interaction: discord.Interaction, 
+    user_id: int, 
+    faction: str = "Unassigned", 
+    place_id: int = 110823256031006
+):
+    TRACKED_USERS[user_id] = {"place_id": place_id, "faction": faction}
+    already_playing_state[user_id] = False
     
-    # Start Discord Bot
-    client = RobloxTrackerBot()
-    # ⚠️ PASTE YOUR BRAND NEW BOT TOKEN BELOW ⚠️
-    client.run("MTUzOTg0MjEyNjAzOTM1OTQ4OA.GMQa_G.kBexGt4556mlJLQh2Y9P6GrLEOA4Kp2k4oVebs")
+    await bot.change_presence(
+        activity=discord.Activity(
+            type=discord.ActivityType.watching, 
+            name=f"{len(TRACKED_USERS)} Pirate Mayhem players"
+        )
+    )
+    await interaction.response.send_message(
+        f"✅ Now tracking user ID `{user_id}` (**{faction}**) for Place `{place_id}`.",
+        ephemeral=True
+    )
+
+@bot.tree.command(name="untrack", description="Stop tracking a Roblox user")
+@app_commands.describe(user_id="The numeric Roblox User ID to remove")
+async def untrack_user(interaction: discord.Interaction, user_id: int):
+    if user_id in TRACKED_USERS:
+        del TRACKED_USERS[user_id]
+        already_playing_state.pop(user_id, None)
+        
+        await bot.change_presence(
+            activity=discord.Activity(
+                type=discord.ActivityType.watching, 
+                name=f"{len(TRACKED_USERS)} Pirate Mayhem players"
+            )
+        )
+        await interaction.response.send_message(f"❌ Stopped tracking user ID `{user_id}`.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"⚠️ User ID `{user_id}` is not currently being tracked.", ephemeral=True)
+
+@bot.tree.command(name="list_tracked", description="View all currently tracked users")
+async def list_tracked(interaction: discord.Interaction):
+    if not TRACKED_USERS:
+        await interaction.response.send_message("No users are currently being tracked.", ephemeral=True)
+        return
+
+    lines = [f"• **ID:** `{uid}` | **Faction:** {data['faction']} | **Place:** `{data['place_id']}`" for uid, data in TRACKED_USERS.items()]
+    summary = "\n".join(lines)
+    
+    embed = discord.Embed(title="📋 Tracked Roblox Users", description=summary, color=3447003)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+if __name__ == "__main__":
+    Thread(target=run_web_server, daemon=True).start()
+    bot.run("MTUzOTg0MjEyNjAzOTM1OTQ4OA.GMQa_G.kBexGt4556mlJLQh2Y9P6GrLEOA4Kp2k4oVebs")
