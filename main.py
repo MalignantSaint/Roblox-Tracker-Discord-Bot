@@ -42,7 +42,7 @@ DEFAULT_ROLE_ID = 1539998360046407801
 DEFAULT_CHANNEL_ID = 1301548308610940970
 
 TRACKED_USERS = {
-
+    6054221747: {"place_id": 110823256031006, "faction": "The Lapis Fleet", "channel_id": DEFAULT_CHANNEL_ID, "role_id": DEFAULT_ROLE_ID},
     3655587119: {"place_id": 110823256031006, "faction": "The Crimson Alliance", "channel_id": DEFAULT_CHANNEL_ID, "role_id": DEFAULT_ROLE_ID},
     1304868946: {"place_id": 110823256031006, "faction": "The Crimson Alliance", "channel_id": DEFAULT_CHANNEL_ID, "role_id": DEFAULT_ROLE_ID},
     8309322015: {"place_id": 110823256031006, "faction": "The Lapis Fleet", "channel_id": DEFAULT_CHANNEL_ID, "role_id": DEFAULT_ROLE_ID},
