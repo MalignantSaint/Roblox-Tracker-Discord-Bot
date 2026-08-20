@@ -7,7 +7,7 @@ from flask import Flask, request
 
 # === FLASK SERVER ===
 app = Flask("")
-SERVER_DOMAIN = "https://pirate-mayhem-hit-list.onrender.com"
+SERVER_DOMAIN = "https://roblox-tracker-discord-bot.onrender.com/"
 
 @app.route("/")
 def home():
@@ -159,4 +159,4 @@ if __name__ == "__main__":
     # Start Discord Bot
     client = RobloxTrackerBot()
     # ⚠️ PASTE YOUR BRAND NEW BOT TOKEN BELOW ⚠️
-    client.run("MTUzOTg0MjEyNjAzOTM1OTQ4OA.Gk9TBI.UCGYH6vHMplTJpb17oPjGHyYIx228JlpQp_NGI")
+    client.run("MTUzOTg0MjEyNjAzOTM1OTQ4OA.GMQa_G.kBexGt4556mlJLQh2Y9P6GrLEOA4Kp2k4oVebs")
