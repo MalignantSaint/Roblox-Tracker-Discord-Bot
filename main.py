@@ -1,9 +1,9 @@
+import asyncio
+from threading import Thread
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
-import aiohttp
-import asyncio
-from threading import Thread
 from flask import Flask, request
 from waitress import serve
 
@@ -39,14 +39,14 @@ def run_web_server():
 
 # === CONFIGURATION & DATA STORES ===
 DISCORD_ROLE_ID = 1539998360046407801
-TARGET_CHANNEL_ID = 1301548308610940970  # Replace with your channel ID
+TARGET_CHANNEL_ID = 1301548308610940970
 
 TRACKED_USERS = {
-    6054221747: {"place_id": 110823256031006, "faction": "The Lapis Fleet"},
-    3655587119: {"place_id": 110823256031006, "faction": "The Crimson Alliance"},
-    1304868946: {"place_id": 110823256031006, "faction": "The Crimson Alliance"},
-    8309322015: {"place_id": 110823256031006, "faction": "The Lapis Fleet"},
-    4977310930: {"place_id": 110823256031006, "faction": "The Lapis Fleet"},
+    6054221747: {"place_id": 110823256031006, "faction": "The Lapis Fleet", "game_name": "Pirate Mayhem"},
+    3655587119: {"place_id": 110823256031006, "faction": "The Crimson Alliance", "game_name": "Pirate Mayhem"},
+    1304868946: {"place_id": 110823256031006, "faction": "The Crimson Alliance", "game_name": "Pirate Mayhem"},
+    8309322015: {"place_id": 110823256031006, "faction": "The Lapis Fleet", "game_name": "Pirate Mayhem"},
+    4977310930: {"place_id": 110823256031006, "faction": "The Lapis Fleet", "game_name": "Pirate Mayhem"},
 }
 
 already_playing_state = {user_id: False for user_id in TRACKED_USERS}
@@ -89,6 +89,7 @@ class RobloxTrackerBot(commands.Bot):
                 for user_id, user_data in list(TRACKED_USERS.items()):
                     target_place_id = user_data["place_id"]
                     faction = user_data["faction"]
+                    game_name = user_data.get("game_name", "Pirate Mayhem")
                     username = await self.get_username(session, user_id)
                     
                     presence_url = "https://presence.roblox.com/v1/presence/users"
@@ -118,13 +119,13 @@ class RobloxTrackerBot(commands.Bot):
                                         
                                         embed = discord.Embed(
                                             title="🎮 Join Server",
-                                            description=f"**Player:** {username}\n**Faction:** {faction}\n**Place ID:** `{target_place_id}`",
+                                            description=f"**Player:** {username}\n**Faction:** {faction}\n**Game:** **{game_name}**",
                                             color=5814783
                                         )
                                         embed.add_field(name="Direct Join", value=f"[👉 Click Here to Join Game]({click_to_join})")
                                         
                                         message = await channel.send(
-                                            content=f"<@&{DISCORD_ROLE_ID}>! Targeted player **{username}** of **{faction}** is now active in Pirate Mayhem!",
+                                            content=f"<@&{DISCORD_ROLE_ID}>! Targeted player **{username}** of **{faction}** is now active in **{game_name}**!",
                                             embed=embed
                                         )
                                         
@@ -157,15 +158,17 @@ bot = RobloxTrackerBot()
 @app_commands.describe(
     user_id="The numeric Roblox User ID",
     faction="Faction name",
+    game_name="Name of the game",
     place_id="Target Roblox Place ID"
 )
 async def track_user(
     interaction: discord.Interaction, 
     user_id: int, 
     faction: str = "Unassigned", 
+    game_name: str = "Pirate Mayhem",
     place_id: int = 110823256031006
 ):
-    TRACKED_USERS[user_id] = {"place_id": place_id, "faction": faction}
+    TRACKED_USERS[user_id] = {"place_id": place_id, "faction": faction, "game_name": game_name}
     already_playing_state[user_id] = False
     
     await bot.change_presence(
@@ -175,7 +178,7 @@ async def track_user(
         )
     )
     await interaction.response.send_message(
-        f"✅ Now tracking user ID `{user_id}` (**{faction}**) for Place `{place_id}`.",
+        f"✅ Now tracking user ID `{user_id}` (**{faction}**) for **{game_name}**.",
         ephemeral=True
     )
 
@@ -202,20 +205,21 @@ async def list_tracked(interaction: discord.Interaction):
         await interaction.response.send_message("No users are currently being tracked.", ephemeral=True)
         return
 
-    # Defer response to allow time for API requests
     await interaction.response.defer(ephemeral=True)
 
     async with aiohttp.ClientSession() as session:
         lines = []
         for uid, data in TRACKED_USERS.items():
             username = await bot.get_username(session, uid)
+            game_name = data.get("game_name", "Pirate Mayhem")
             lines.append(
-                f"• **{username}** (`{uid}`) | **Faction:** {data['faction']} | **Place:** `{data['place_id']}`"
+                f"• **{username}** (`{uid}`) | **Faction:** {data['faction']} | **Game:** **{game_name}**"
             )
 
     summary = "\n".join(lines)
     embed = discord.Embed(title="📋 Tracked Roblox Users", description=summary, color=3447003)
     await interaction.followup.send(embed=embed, ephemeral=True)
+
 if __name__ == "__main__":
     Thread(target=run_web_server, daemon=True).start()
-    bot.run("MTUzOTg0MjEyNjAzOTM1OTQ4OA.GMQa_G.kBexGt4556mlJLQh2Y9P6GrLEOA4Kp2k4oVebs")
+    bot.run("YOUR_DISCORD_BOT_TOKEN_HERE")
