@@ -56,8 +56,9 @@ username_cache = {}
 class RobloxTrackerBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
+        intents.message_content = True  # Enable message content intent
         super().__init__(command_prefix="!", intents=intents)
-
+        
     async def setup_hook(self):
         await self.tree.sync()
         print("[INFO] Slash commands synchronized globally.")
