@@ -5,6 +5,7 @@ import aiohttp
 import asyncio
 from threading import Thread
 from flask import Flask, request
+from waitress import serve
 
 # === FLASK SERVER ===
 app = Flask("")
@@ -34,7 +35,7 @@ def join():
     """
 
 def run_web_server():
-    app.run(host="0.0.0.0", port=10000)
+    serve(app, host="0.0.0.0", port=10000)
 
 # === CONFIGURATION & DATA STORES ===
 DISCORD_ROLE_ID = 1539998360046407801
