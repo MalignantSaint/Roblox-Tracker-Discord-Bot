@@ -37,15 +37,16 @@ def join():
 def run_web_server():
     serve(app, host="0.0.0.0", port=10000)
 
-# === CONFIGURATION & DATA STORES ===
-DISCORD_ROLE_ID = 1539998360046407801
-TARGET_CHANNEL_ID = 1301548308610940970
+# === CONFIGURATION & DEFAULTS ===
+DEFAULT_ROLE_ID = 1539998360046407801
+DEFAULT_CHANNEL_ID = 1301548308610940970
 
 TRACKED_USERS = {
-    3655587119: {"place_id": 110823256031006, "faction": "The Crimson Alliance"},
-    1304868946: {"place_id": 110823256031006, "faction": "The Crimson Alliance"},
-    8309322015: {"place_id": 110823256031006, "faction": "The Lapis Fleet"},
-    4977310930: {"place_id": 110823256031006, "faction": "The Lapis Fleet"},
+    6054221747: {"place_id": 110823256031006, "faction": "The Lapis Fleet", "channel_id": DEFAULT_CHANNEL_ID, "role_id": DEFAULT_ROLE_ID},
+    3655587119: {"place_id": 110823256031006, "faction": "The Crimson Alliance", "channel_id": DEFAULT_CHANNEL_ID, "role_id": DEFAULT_ROLE_ID},
+    1304868946: {"place_id": 110823256031006, "faction": "The Crimson Alliance", "channel_id": DEFAULT_CHANNEL_ID, "role_id": DEFAULT_ROLE_ID},
+    8309322015: {"place_id": 110823256031006, "faction": "The Lapis Fleet", "channel_id": DEFAULT_CHANNEL_ID, "role_id": DEFAULT_ROLE_ID},
+    4977310930: {"place_id": 110823256031006, "faction": "The Lapis Fleet", "channel_id": DEFAULT_CHANNEL_ID, "role_id": DEFAULT_ROLE_ID},
 }
 
 already_playing_state = {user_id: False for user_id in TRACKED_USERS}
@@ -96,13 +97,16 @@ class RobloxTrackerBot(commands.Bot):
 
     @tasks.loop(seconds=60)
     async def monitor_loop(self):
-        channel = self.get_channel(TARGET_CHANNEL_ID)
-        if not channel:
-            return
-
         async with aiohttp.ClientSession() as session:
             try:
                 for user_id, user_data in list(TRACKED_USERS.items()):
+                    target_channel_id = user_data.get("channel_id", DEFAULT_CHANNEL_ID)
+                    role_id = user_data.get("role_id", DEFAULT_ROLE_ID)
+                    
+                    channel = self.get_channel(target_channel_id)
+                    if not channel:
+                        continue
+
                     target_place_id = user_data["place_id"]
                     faction = user_data["faction"]
                     game_name = user_data.get("game_name") or await self.get_game_name(session, target_place_id)
@@ -141,7 +145,7 @@ class RobloxTrackerBot(commands.Bot):
                                         embed.add_field(name="Direct Join", value=f"[👉 Click Here to Join Game]({click_to_join})")
                                         
                                         message = await channel.send(
-                                            content=f"<@&{DISCORD_ROLE_ID}>! Targeted player **{username}** of **{faction}** is now active in **{game_name}**!",
+                                            content=f"<@&{role_id}>! Targeted player **{username}** of **{faction}** is now active in **{game_name}**!",
                                             embed=embed
                                         )
                                         
@@ -174,23 +178,32 @@ bot = RobloxTrackerBot()
 @app_commands.describe(
     user_id="The numeric Roblox User ID",
     faction="Faction name",
-    place_id="Target Roblox Place ID"
+    place_id="Target Roblox Place ID",
+    channel="Target channel for alerts (optional)",
+    role="Role to ping (optional)"
 )
 async def track_user(
     interaction: discord.Interaction, 
     user_id: int, 
     faction: str = "Unassigned", 
-    place_id: int = 110823256031006
+    place_id: int = 110823256031006,
+    channel: discord.TextChannel = None,
+    role: discord.Role = None
 ):
     await interaction.response.defer(ephemeral=True)
 
     async with aiohttp.ClientSession() as session:
         game_name = await bot.get_game_name(session, place_id)
 
+    target_channel_id = channel.id if channel else DEFAULT_CHANNEL_ID
+    target_role_id = role.id if role else DEFAULT_ROLE_ID
+
     TRACKED_USERS[user_id] = {
         "place_id": place_id, 
         "faction": faction, 
-        "game_name": game_name
+        "game_name": game_name,
+        "channel_id": target_channel_id,
+        "role_id": target_role_id
     }
     already_playing_state[user_id] = False
     
@@ -200,8 +213,14 @@ async def track_user(
             name=f"{len(TRACKED_USERS)} Roblox players"
         )
     )
+
+    channel_mention = channel.mention if channel else f"<#{DEFAULT_CHANNEL_ID}>"
+    role_mention = role.mention if role else f"<@&{DEFAULT_ROLE_ID}>"
+
     await interaction.followup.send(
-        f"✅ Now tracking user ID `{user_id}` (**{faction}**) for **{game_name}**.",
+        f"✅ Now tracking user ID `{user_id}` (**{faction}**) for **{game_name}**.\n"
+        f"📢 **Channel:** {channel_mention}\n"
+        f"🔔 **Role Mention:** {role_mention}",
         ephemeral=True
     )
 
@@ -235,8 +254,10 @@ async def list_tracked(interaction: discord.Interaction):
         for uid, data in TRACKED_USERS.items():
             username = await bot.get_username(session, uid)
             game_name = data.get("game_name") or await bot.get_game_name(session, data["place_id"])
+            ch_id = data.get("channel_id", DEFAULT_CHANNEL_ID)
+            r_id = data.get("role_id", DEFAULT_ROLE_ID)
             lines.append(
-                f"• **{username}** (`{uid}`) | **Faction:** {data['faction']} | **Game:** **{game_name}**"
+                f"• **{username}** (`{uid}`) | **Faction:** {data['faction']} | **Game:** **{game_name}** | **Channel:** <#{ch_id}> | **Role:** <@&{r_id}>"
             )
 
     summary = "\n".join(lines)
