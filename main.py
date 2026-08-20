@@ -9,7 +9,7 @@ from waitress import serve
 
 # === FLASK SERVER ===
 app = Flask("")
-SERVER_DOMAIN = "https://roblox-tracker-discord-bot.onrender.com/"
+SERVER_DOMAIN = "https://roblox-tracker-discord-bot.onrender.com"
 
 @app.route("/")
 def home():
