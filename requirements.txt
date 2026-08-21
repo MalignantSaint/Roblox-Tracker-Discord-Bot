@@ -5,3 +5,4 @@ requests
 waitress
 dnspython
 motor
+python-dotenv
