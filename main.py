@@ -8,6 +8,19 @@ from discord.ext import commands, tasks
 from flask import Flask, request
 from waitress import serve
 import motor.motor_asyncio
+from dotenv import load_dotenv
+
+# Load environment variables from the .env file
+load_dotenv()
+
+# Grab secrets securely from the environment
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+MONGO_URL = os.getenv("MONGO_URL")
+
+# === MONGODB DATABASE SETUP ===
+cluster = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URL)
+db = cluster["roblox_tracker"]
+collection = db["users"]
 
 # === FLASK SERVER ===
 app = Flask("")
@@ -319,4 +332,4 @@ async def list_tracked(interaction: discord.Interaction):
 
 if __name__ == "__main__":
     Thread(target=run_web_server, daemon=True).start()
-    bot.run("MTUzOTg0MjEyNjAzOTM1OTQ4OA.GMQa_G.kBexGt4556mlJLQh2Y9P6GrLEOA4Kp2k4oVebs")
+    bot.run(DISCORD_TOKEN)
