@@ -1,4 +1,5 @@
 import asyncio
+import os
 from threading import Thread
 import aiohttp
 import discord
@@ -6,6 +7,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from flask import Flask, request
 from waitress import serve
+import motor.motor_asyncio
 
 # === FLASK SERVER ===
 app = Flask("")
@@ -37,20 +39,17 @@ def join():
 def run_web_server():
     serve(app, host="0.0.0.0", port=10000)
 
-# === CONFIGURATION & DEFAULTS ===
-DEFAULT_ROLE_ID = 1539998360046407801
-DEFAULT_CHANNEL_ID = 1301548308610940970
+# === MONGODB DATABASE SETUP ===
+# Make sure to replace this with your actual MongoDB Connection String!
+MONGO_URL = "PASTE_YOUR_CONNECTION_STRING_HERE"
+cluster = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URL)
+db = cluster["roblox_tracker"]
+collection = db["users"]
 
-TRACKED_USERS = {
-    6054221747: {"place_id": 110823256031006, "faction": "The Lapis Fleet", "channel_id": DEFAULT_CHANNEL_ID, "role_id": DEFAULT_ROLE_ID},
-    3655587119: {"place_id": 110823256031006, "faction": "The Crimson Alliance", "channel_id": DEFAULT_CHANNEL_ID, "role_id": DEFAULT_ROLE_ID},
-    1304868946: {"place_id": 110823256031006, "faction": "The Crimson Alliance", "channel_id": DEFAULT_CHANNEL_ID, "role_id": DEFAULT_ROLE_ID},
-    8309322015: {"place_id": 110823256031006, "faction": "The Lapis Fleet", "channel_id": DEFAULT_CHANNEL_ID, "role_id": DEFAULT_ROLE_ID},
-    4977310930: {"place_id": 110823256031006, "faction": "The Lapis Fleet", "channel_id": DEFAULT_CHANNEL_ID, "role_id": DEFAULT_ROLE_ID},
-}
-
-# Track the specific Place ID last recorded for each user (None if offline/not playing)
-last_played_place = {user_id: None for user_id in TRACKED_USERS}
+# === INITIALIZE DATA ===
+# TRACKED_USERS will now hold a list of server configurations for each user
+TRACKED_USERS = {} 
+last_played_place = {}
 username_cache = {}
 game_name_cache = {}
 
@@ -62,8 +61,18 @@ class RobloxTrackerBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
+        global TRACKED_USERS
+        
+        # Load all users and their server lists from MongoDB
+        cursor = collection.find({})
+        async for document in cursor:
+            user_id = int(document["_id"])
+            # 'servers' is a list of dictionaries containing channel, role, guild, etc.
+            TRACKED_USERS[user_id] = document.get("servers", [])
+            last_played_place[user_id] = None
+            
         await self.tree.sync()
-        print("[INFO] Slash commands synchronized globally.")
+        print(f"[INFO] Slash commands synced. Loaded {len(TRACKED_USERS)} users from database.")
         self.monitor_loop.start()
 
     async def get_username(self, session, user_id):
@@ -87,13 +96,14 @@ class RobloxTrackerBot(commands.Bot):
         if place_id in game_name_cache:
             return game_name_cache[place_id]
         try:
-            url = f"https://economy.roblox.com/v1/assets/{place_id}/details"
+            url = f"https://games.roblox.com/v1/games/multiget-place-details?placeIds={place_id}"
             async with session.get(url, timeout=10) as res:
                 if res.status == 200:
                     data = await res.json()
-                    name = data.get("Name", f"Place {place_id}")
-                    game_name_cache[place_id] = name
-                    return name
+                    if data and len(data) > 0:
+                        name = data[0].get("name", f"Place {place_id}")
+                        game_name_cache[place_id] = name
+                        return name
         except Exception as e:
             print(f"Error fetching game name for Place ID {place_id}: {e}")
         return f"Place {place_id}"
@@ -102,16 +112,10 @@ class RobloxTrackerBot(commands.Bot):
     async def monitor_loop(self):
         async with aiohttp.ClientSession() as session:
             try:
-                for user_id, user_data in list(TRACKED_USERS.items()):
-                    target_channel_id = user_data.get("channel_id", DEFAULT_CHANNEL_ID)
-                    role_id = user_data.get("role_id", DEFAULT_ROLE_ID)
-                    
-                    channel = self.get_channel(target_channel_id)
-                    if not channel:
-                        continue
-
-                    target_place_id = user_data.get("place_id")
-                    faction = user_data["faction"]
+                for user_id, servers_list in list(TRACKED_USERS.items()):
+                    if not servers_list:
+                        continue # Nobody is tracking this user anymore
+                        
                     username = await self.get_username(session, user_id)
                     
                     presence_url = "https://presence.roblox.com/v1/presence/users"
@@ -124,57 +128,65 @@ class RobloxTrackerBot(commands.Bot):
                                 user_status = presences[0]
                                 presence_type = user_status.get("userPresenceType")
                                 current_place_id = user_status.get("placeId")
+                                root_place_id = user_status.get("rootPlaceId")
                                 game_instance_id = user_status.get("gameId")
                                 last_location = user_status.get("lastLocation", "")
                                 
                                 # presence_type 2 means "In Game"
                                 if presence_type == 2:
-                                    active_place = current_place_id or target_place_id
-                                    should_alert = False
+                                    active_place = current_place_id
+                                    old_place = last_played_place.get(user_id)
 
-                                    if target_place_id is None:
-                                        # Tracking ANY game: Alert if they joined a game or switched to a different place
-                                        if active_place and last_played_place.get(user_id) != active_place:
-                                            should_alert = True
-                                    else:
-                                        # Tracking SPECIFIC game: Alert if current game matches target
-                                        is_target = (current_place_id == target_place_id) or (str(target_place_id) in last_location)
-                                        if is_target and last_played_place.get(user_id) != target_place_id:
-                                            should_alert = True
-
-                                    if should_alert:
-                                        game_name = await self.get_game_name(session, active_place) if active_place else "Roblox Game"
+                                    # Only process if they changed games/joined a new server
+                                    if active_place and old_place != active_place:
                                         
-                                        if game_instance_id and active_place:
-                                            click_to_join = f"{SERVER_DOMAIN}/join?placeId={active_place}&gameInstanceId={game_instance_id}"
-                                        elif active_place:
-                                            click_to_join = f"https://www.roblox.com/games/{active_place}"
+                                        # Figure out game name once for all servers
+                                        if last_location and last_location.strip() and last_location != "Website":
+                                            game_name = last_location
                                         else:
-                                            click_to_join = "https://www.roblox.com"
-                                        
-                                        embed = discord.Embed(
-                                            title="🎮 Join Server",
-                                            description=f"**Player:** {username}\n**Faction:** {faction}\n**Game:** **{game_name}**",
-                                            color=5814783
-                                        )
-                                        embed.add_field(name="Direct Join", value=f"[👉 Click Here to Join Game]({click_to_join})")
-                                        
-                                        message = await channel.send(
-                                            content=f"<@&{role_id}>! Targeted player **{username}** of **{faction}** is now active in **{game_name}**!",
-                                            embed=embed
-                                        )
-                                        
-                                        if channel.is_news():
-                                            await message.publish()
-                                            print(f"[SUCCESS] Auto-published alert for {username}!")
+                                            game_name = await self.get_game_name(session, active_place)
                                             
-                                        # Record this place as the last notified place
-                                        last_played_place[user_id] = active_place if target_place_id is None else target_place_id
-                                    elif target_place_id is not None and not ((current_place_id == target_place_id) or (str(target_place_id) in last_location)):
-                                        # Left target game to play a different game
-                                        last_played_place[user_id] = None
+                                        # Now check EVERY server that is tracking this user
+                                        for server_cfg in servers_list:
+                                            target_place_id = server_cfg.get("place_id")
+                                            should_alert = False
+
+                                            if target_place_id is None:
+                                                # This server tracks "Any Game"
+                                                should_alert = True
+                                            else:
+                                                # This server tracks a Specific Game
+                                                if current_place_id == target_place_id or root_place_id == target_place_id:
+                                                    should_alert = True
+
+                                            if should_alert:
+                                                channel = self.get_channel(server_cfg.get("channel_id"))
+                                                if channel:
+                                                    faction = server_cfg.get("faction", "Unassigned")
+                                                    role_id = server_cfg.get("role_id")
+                                                    
+                                                    if game_instance_id and active_place:
+                                                        click_to_join = f"{SERVER_DOMAIN}/join?placeId={active_place}&gameInstanceId={game_instance_id}"
+                                                    else:
+                                                        click_to_join = f"https://www.roblox.com/games/{active_place}"
+                                                    
+                                                    embed = discord.Embed(
+                                                        title="🎮 Join Server",
+                                                        description=f"**Player:** {username}\n**Faction:** {faction}\n**Game:** **{game_name}**",
+                                                        color=5814783
+                                                    )
+                                                    embed.add_field(name="Direct Join", value=f"[👉 Click Here to Join Game]({click_to_join})")
+                                                    
+                                                    ping_text = f"<@&{role_id}>! " if role_id else ""
+                                                    message_content = f"{ping_text}Targeted player **{username}** of **{faction}** is now active in **{game_name}**!"
+
+                                                    message = await channel.send(content=message_content, embed=embed)
+                                                    if channel.is_news():
+                                                        await message.publish()
+                                                        
+                                        # Update global location after checking all servers
+                                        last_played_place[user_id] = active_place
                                 else:
-                                    # User is offline or on Roblox website (not in game)
                                     last_played_place[user_id] = None
 
                         elif response.status == 429:
@@ -184,28 +196,23 @@ class RobloxTrackerBot(commands.Bot):
             except Exception as e:
                 print(f"An error occurred in monitor_loop: {e}")
 
-    @monitor_loop.before_loop
-    async def before_monitor_loop(self):
-        await self.wait_until_ready()
-        print(f"Bot logged in as {self.user} and monitoring {len(TRACKED_USERS)} users...")
-
 bot = RobloxTrackerBot()
 
 # === SLASH COMMANDS ===
-@bot.tree.command(name="track", description="Add or update a Roblox user to track")
+@bot.tree.command(name="track", description="Add or update a Roblox user to track for THIS server")
 @app_commands.describe(
     user_id="The numeric Roblox User ID",
+    channel="The Discord channel to send alerts to",
     faction="Faction name",
     place_id="Target Roblox Place ID (leave empty to track all games)",
-    channel="Target channel for alerts (optional)",
     role="Role to ping (optional)"
 )
 async def track_user(
     interaction: discord.Interaction, 
     user_id: int, 
+    channel: discord.TextChannel,
     faction: str = "Unassigned", 
     place_id: int = None,
-    channel: discord.TextChannel = None,
     role: discord.Role = None
 ):
     await interaction.response.defer(ephemeral=True)
@@ -215,54 +222,67 @@ async def track_user(
         async with aiohttp.ClientSession() as session:
             game_name = await bot.get_game_name(session, place_id)
 
-    target_channel_id = channel.id if channel else DEFAULT_CHANNEL_ID
-    target_role_id = role.id if role else DEFAULT_ROLE_ID
+    # Make sure this user exists in our tracking dictionary
+    if user_id not in TRACKED_USERS:
+        TRACKED_USERS[user_id] = []
+        last_played_place[user_id] = None
 
-    TRACKED_USERS[user_id] = {
-        "place_id": place_id, 
-        "faction": faction, 
-        "game_name": game_name,
-        "channel_id": target_channel_id,
-        "role_id": target_role_id
-    }
-    last_played_place[user_id] = None
+    # Clear out any old configuration FOR THIS SPECIFIC SERVER to prevent duplicate alerts
+    TRACKED_USERS[user_id] = [cfg for cfg in TRACKED_USERS[user_id] if cfg.get("guild_id") != interaction.guild_id]
     
-    await bot.change_presence(
-        activity=discord.Activity(
-            type=discord.ActivityType.watching, 
-            name=f"{len(TRACKED_USERS)} Roblox players"
-        )
+    # Append the new configuration for this server
+    TRACKED_USERS[user_id].append({
+        "guild_id": interaction.guild_id,
+        "channel_id": channel.id,
+        "role_id": role.id if role else None,
+        "faction": faction,
+        "place_id": place_id,
+        "game_name": game_name
+    })
+    
+    # Save the updated list to MongoDB
+    await collection.update_one(
+        {"_id": user_id}, 
+        {"$set": {"servers": TRACKED_USERS[user_id]}}, 
+        upsert=True 
     )
-
-    channel_mention = channel.mention if channel else f"<#{DEFAULT_CHANNEL_ID}>"
-    role_mention = role.mention if role else f"<@&{DEFAULT_ROLE_ID}>"
+    
+    role_mention = role.mention if role else "None"
     target_game_str = f"**{game_name}**" if place_id else "**Any Game**"
 
     await interaction.followup.send(
-        f"✅ Now tracking user ID `{user_id}` (**{faction}**) for {target_game_str}.\n"
-        f"📢 **Channel:** {channel_mention}\n"
+        f"✅ Now tracking user ID `{user_id}` (**{faction}**) for {target_game_str} in this server.\n"
+        f"📢 **Channel:** {channel.mention}\n"
         f"🔔 **Role Mention:** {role_mention}",
         ephemeral=True
     )
 
-@bot.tree.command(name="untrack", description="Stop tracking a Roblox user")
+@bot.tree.command(name="untrack", description="Stop tracking a Roblox user in THIS server")
 @app_commands.describe(user_id="The numeric Roblox User ID to remove")
 async def untrack_user(interaction: discord.Interaction, user_id: int):
     if user_id in TRACKED_USERS:
-        del TRACKED_USERS[user_id]
-        last_played_place.pop(user_id, None)
+        original_length = len(TRACKED_USERS[user_id])
         
-        await bot.change_presence(
-            activity=discord.Activity(
-                type=discord.ActivityType.watching, 
-                name=f"{len(TRACKED_USERS)} Roblox players"
-            )
-        )
-        await interaction.response.send_message(f"❌ Stopped tracking user ID `{user_id}`.", ephemeral=True)
+        # Filter out the configuration that matches the server the command was typed in
+        TRACKED_USERS[user_id] = [cfg for cfg in TRACKED_USERS[user_id] if cfg.get("guild_id") != interaction.guild_id]
+        
+        if len(TRACKED_USERS[user_id]) < original_length:
+            if len(TRACKED_USERS[user_id]) == 0:
+                # If no servers are tracking this user anymore, delete them entirely
+                del TRACKED_USERS[user_id]
+                last_played_place.pop(user_id, None)
+                await collection.delete_one({"_id": user_id})
+            else:
+                # Update MongoDB with the modified list
+                await collection.update_one({"_id": user_id}, {"$set": {"servers": TRACKED_USERS[user_id]}})
+                
+            await interaction.response.send_message(f"❌ Stopped tracking user ID `{user_id}` in this server.", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"⚠️ User ID `{user_id}` wasn't tracked in this server.", ephemeral=True)
     else:
-        await interaction.response.send_message(f"⚠️ User ID `{user_id}` is not currently being tracked.", ephemeral=True)
+        await interaction.response.send_message(f"⚠️ User ID `{user_id}` is not currently being tracked at all.", ephemeral=True)
 
-@bot.tree.command(name="list_tracked", description="View all currently tracked users")
+@bot.tree.command(name="list_tracked", description="View tracked users for THIS server")
 async def list_tracked(interaction: discord.Interaction):
     if not TRACKED_USERS:
         await interaction.response.send_message("No users are currently being tracked.", ephemeral=True)
@@ -272,22 +292,30 @@ async def list_tracked(interaction: discord.Interaction):
 
     async with aiohttp.ClientSession() as session:
         lines = []
-        for uid, data in TRACKED_USERS.items():
-            username = await bot.get_username(session, uid)
-            p_id = data.get("place_id")
-            if p_id:
-                game_name = data.get("game_name") or await bot.get_game_name(session, p_id)
-            else:
-                game_name = "Any Game"
-            ch_id = data.get("channel_id", DEFAULT_CHANNEL_ID)
-            r_id = data.get("role_id", DEFAULT_ROLE_ID)
-            lines.append(
-                f"• **{username}** (`{uid}`) | **Faction:** {data['faction']} | **Game:** **{game_name}** | **Channel:** <#{ch_id}> | **Role:** <@&{r_id}>"
-            )
+        for uid, servers_list in TRACKED_USERS.items():
+            for cfg in servers_list:
+                # Only show the user if they are tracked in THIS specific Discord server
+                if cfg.get("guild_id") == interaction.guild_id:
+                    username = await bot.get_username(session, uid)
+                    p_id = cfg.get("place_id")
+                    
+                    game_name = cfg.get("game_name", "Any Game")
+                    ch_id = cfg.get("channel_id")
+                    r_id = cfg.get("role_id")
+                    
+                    role_display = f"<@&{r_id}>" if r_id else "None"
+                    channel_display = f"<#{ch_id}>" if ch_id else "Unknown"
+                    
+                    lines.append(
+                        f"• **{username}** (`{uid}`) | **Faction:** {cfg.get('faction', 'Unassigned')} | **Game:** **{game_name}** | **Channel:** {channel_display} | **Role:** {role_display}"
+                    )
 
-    summary = "\n".join(lines)
-    embed = discord.Embed(title="📋 Tracked Roblox Users", description=summary, color=3447003)
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    if lines:
+        summary = "\n".join(lines)
+        embed = discord.Embed(title="📋 Tracked Roblox Users (This Server)", description=summary, color=3447003)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    else:
+        await interaction.followup.send("No users are currently being tracked in this specific server.", ephemeral=True)
 
 if __name__ == "__main__":
     Thread(target=run_web_server, daemon=True).start()
