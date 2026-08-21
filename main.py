@@ -41,7 +41,7 @@ def run_web_server():
 
 # === MONGODB DATABASE SETUP ===
 # Make sure to replace this with your actual MongoDB Connection String!
-MONGO_URL = "PASTE_YOUR_CONNECTION_STRING_HERE"
+MONGO_URL = "mongodb+srv://masterofflyingshadows_db_user:XsyIkQ3XFdxvFoEq@cluster0.yym3jop.mongodb.net/?appName=Cluster0"
 cluster = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URL)
 db = cluster["roblox_tracker"]
 collection = db["users"]
