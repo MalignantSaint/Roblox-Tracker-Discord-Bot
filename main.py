@@ -9,6 +9,8 @@ from flask import Flask, request
 from waitress import serve
 import motor.motor_asyncio
 from dotenv import load_dotenv
+import time
+import datetime
 
 # Load environment variables from the .env file
 load_dotenv()
@@ -63,6 +65,10 @@ collection = db["users"]
 # TRACKED_USERS will now hold a list of server configurations for each user
 TRACKED_USERS = {} 
 last_played_place = {}
+# Track session start timestamps (user_id: timestamp)
+session_start_times = {}
+# Track the sent Discord message objects so we can update them if needed (optional, or we send a new log when they leave)
+active_alert_messages = {} # {user_id: {guild_id: message_object}}
 username_cache = {}
 game_name_cache = {}
 
@@ -127,7 +133,7 @@ class RobloxTrackerBot(commands.Bot):
             try:
                 for user_id, servers_list in list(TRACKED_USERS.items()):
                     if not servers_list:
-                        continue # Nobody is tracking this user anymore
+                        continue
                         
                     username = await self.get_username(session, user_id)
                     
@@ -145,32 +151,30 @@ class RobloxTrackerBot(commands.Bot):
                                 game_instance_id = user_status.get("gameId")
                                 last_location = user_status.get("lastLocation", "")
                                 
+                                now = time.time()
+                                
                                 # presence_type 2 means "In Game"
                                 if presence_type == 2:
                                     active_place = current_place_id
                                     old_place = last_played_place.get(user_id)
 
-                                    # Only process if they changed games/joined a new server
+                                    # If they just joined or switched games
                                     if active_place and old_place != active_place:
-                                        
-                                        # Figure out game name once for all servers
+                                        # Set session start time if not already playing
+                                        if user_id not in session_start_times or old_place is None:
+                                            session_start_times[user_id] = now
+                                            
                                         if last_location and last_location.strip() and last_location != "Website":
                                             game_name = last_location
                                         else:
                                             game_name = await self.get_game_name(session, active_place)
                                             
-                                        # Now check EVERY server that is tracking this user
+                                        last_played_place[user_id] = active_place
+                                        
+                                        # Broadcast ONLINE alert with session tracking to relevant servers
                                         for server_cfg in servers_list:
                                             target_place_id = server_cfg.get("place_id")
-                                            should_alert = False
-
-                                            if target_place_id is None:
-                                                # This server tracks "Any Game"
-                                                should_alert = True
-                                            else:
-                                                # This server tracks a Specific Game
-                                                if current_place_id == target_place_id or root_place_id == target_place_id:
-                                                    should_alert = True
+                                            should_alert = (target_place_id is None) or (current_place_id == target_place_id or root_place_id == target_place_id)
 
                                             if should_alert:
                                                 channel = self.get_channel(server_cfg.get("channel_id"))
@@ -184,30 +188,61 @@ class RobloxTrackerBot(commands.Bot):
                                                         click_to_join = f"https://www.roblox.com/games/{active_place}"
                                                     
                                                     embed = discord.Embed(
-                                                        title="🎮 Join Server",
-                                                        description=f"**Player:** {username}\n**Faction:** {faction}\n**Game:** **{game_name}**",
+                                                        title="🟢 ONLINE - Playing Game",
+                                                       description=f"**Player:** {username}\n**Faction:** {faction}\n**Game:** **{game_name}**\n**Status:** ONLINE (Duration: 0m)",
                                                         color=5814783
                                                     )
                                                     embed.add_field(name="Direct Join", value=f"[👉 Click Here to Join Game]({click_to_join})")
                                                     
                                                     ping_text = f"<@&{role_id}>! " if role_id else ""
-                                                    message_content = f"{ping_text}Targeted player **{username}** of **{faction}** is now active in **{game_name}**!"
+                                                    msg = await channel.send(content=f"{ping_text}Targeted player **{username}** is now active!", embed=embed)
+                                                    
+                                                    if user_id not in active_alert_messages:
+                                                        active_alert_messages[user_id] = {}
+                                                    active_alert_messages[user_id][server_cfg.get("guild_id")] = msg
 
-                                                    message = await channel.send(content=message_content, embed=embed)
-                                                    if channel.is_news():
-                                                        await message.publish()
-                                                        
-                                        # Update global location after checking all servers
-                                        last_played_place[user_id] = active_place
+                                    # If they are still playing, we can calculate how long they've been online
+                                    elif user_id in session_start_times:
+                                        duration_seconds = int(now - session_start_times[user_id])
+                                        hours, remainder = divmod(duration_seconds, 3600)
+                                        minutes = remainder // 60
+                                        duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+                                        
+                                        # Optional: Update existing embeds live with the new duration string
+                                        if user_id in active_alert_messages:
+                                            for guild_id, msg in active_alert_messages[user_id].items():
+                                                try:
+                                                    # Fetch and update embed description dynamically
+                                                    embed = msg.embeds[0]
+                                                    # Rebuild description with updated duration string
+                                                    # (A clean way is keeping base data or parsing it)
+                                                except Exception:
+                                                    pass
+
                                 else:
-                                    last_played_place[user_id] = None
+                                    # User left the game (Now OFFLINE / Website)
+                                    if last_played_place.get(user_id) is not None:
+                                        last_played_place[user_id] = None
+                                        session_start_times.pop(user_id, None)
+                                        
+                                        # Send an OFFLINE notification to channels tracking them
+                                        for server_cfg in servers_list:
+                                            channel = self.get_channel(server_cfg.get("channel_id"))
+                                            if channel:
+                                                embed = discord.Embed(
+                                                    title="🔴 OFFLINE",
+                                                    description=f"**Player:** {username}\n**Status:** OFFLINE",
+                                                    color=15158332
+                                                )
+                                                await channel.send(embed=embed)
+                                                
+                                        if user_id in active_alert_messages:
+                                            active_alert_messages.pop(user_id, None)
 
                         elif response.status == 429:
-                            print("[WARNING] Roblox API rate limit hit. Pausing for 2 minutes...")
                             await asyncio.sleep(120)
-
             except Exception as e:
-                print(f"An error occurred in monitor_loop: {e}")
+                print(f"Error in monitor loop: {e}")
 
 bot = RobloxTrackerBot()
 
