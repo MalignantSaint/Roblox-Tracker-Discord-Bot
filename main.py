@@ -211,6 +211,65 @@ class RobloxTrackerBot(commands.Bot):
 
 bot = RobloxTrackerBot()
 
+# === CUSTOM CHECK FOR BOT MANAGER ROLE ===
+def is_bot_manager():
+    async def predicate(interaction: discord.Interaction) -> bool:
+        # Allow server administrators to always bypass or manage it
+        if interaction.user.guild_permissions.administrator:
+            return True
+            
+        # Find the manager role configured for this specific guild
+        guild_id = interaction.guild_id
+        # Search through our loaded TRACKED_USERS or a separate guild config collection
+        # For simplicity, we can check if the user has a role stored for this guild in our database
+        
+        # Query database for this guild's manager role
+        guild_doc = await db["guild_configs"].find_one({"_id": guild_id})
+        if not guild_doc or "manager_role_id" not in guild_doc:
+            await interaction.response.send_message(
+                "⚠️ No bot manager role has been set up for this server yet. Ask an Administrator to use `/set_manager_role`.", 
+                ephemeral=True
+            )
+            return False
+            
+        role_id = guild_doc["manager_role_id"]
+        role = interaction.guild.get_role(role_id)
+        
+        if role and role in interaction.user.roles:
+            return True
+            
+        await interaction.response.send_message(
+            f"❌ You do not have the required bot manager role ({role.mention if role else 'Unknown Role'}) to use this command.", 
+            ephemeral=True
+        )
+        return False
+    return app_commands.check(predicate)
+
+# === NEW COMMAND: SET MANAGER ROLE ===
+@bot.tree.command(name="set_manager_role", description="Set the required role to manage tracked users in this server")
+@app_commands.describe(role="The role allowed to add/remove tracked users")
+@app_commands.checks.has_permissions(administrator=True)
+async def set_manager_role(interaction: discord.Interaction, role: discord.Role):
+    await interaction.response.defer(ephemeral=True)
+    
+    # Save the manager role ID in a separate 'guild_configs' collection in MongoDB
+    await db["guild_configs"].update_one(
+        {"_id": interaction.guild_id},
+        {"$set": {"manager_role_id": role.id}},
+        upsert=True
+    )
+    
+    await interaction.followup.send(
+        f"✅ Successfully set the bot manager role to {role.mention}. Only members with this role (or Administrators) can now use `/track` and `/untrack`.",
+        ephemeral=True
+    )
+
+# Error handler if someone lacks administrator permissions to run setup
+@set_manager_role.error
+async def set_manager_role_error(interaction: discord.Interaction, error):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("⚠️ You need **Administrator** permissions to set the bot manager role.", ephemeral=True)
+
 # === SLASH COMMANDS ===
 @bot.tree.command(name="track", description="Add or update a Roblox user to track for THIS server")
 @app_commands.describe(
@@ -220,6 +279,7 @@ bot = RobloxTrackerBot()
     place_id="Target Roblox Place ID (leave empty to track all games)",
     role="Role to ping (optional)"
 )
+@is_bot_manager() # <--- PROTECTED BY ROLE CHECK
 async def track_user(
     interaction: discord.Interaction, 
     user_id: int, 
@@ -272,6 +332,7 @@ async def track_user(
 
 @bot.tree.command(name="untrack", description="Stop tracking a Roblox user in THIS server")
 @app_commands.describe(user_id="The numeric Roblox User ID to remove")
+@is_bot_manager()
 async def untrack_user(interaction: discord.Interaction, user_id: int):
     if user_id in TRACKED_USERS:
         original_length = len(TRACKED_USERS[user_id])
