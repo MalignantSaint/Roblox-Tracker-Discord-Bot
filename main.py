@@ -126,6 +126,19 @@ class RobloxTrackerBot(commands.Bot):
         except Exception as e:
             print(f"Error fetching game name for Place ID {place_id}: {e}")
         return f"Place {place_id}"
+        
+    async def get_avatar_thumbnail(self, session, user_id):
+        try:
+            url = f"https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds={user_id}&size=150x150&format=Png&isCircular=false"
+            async with session.get(url, timeout=10) as res:
+                if res.status == 200:
+                    data = await res.json()
+                    thumbnails = data.get("data", [])
+                    if thumbnails:
+                        return thumbnails[0].get("imageUrl", None)
+        except Exception as e:
+            print(f"Error fetching avatar thumbnail for {user_id}: {e}")
+        return None   
 
     @tasks.loop(seconds=60)
     async def monitor_loop(self):
@@ -136,6 +149,7 @@ class RobloxTrackerBot(commands.Bot):
                         continue
                         
                     username = await self.get_username(session, user_id)
+                    avatar_url = await self.get_avatar_thumbnail(session, user_id)
                     
                     presence_url = "https://presence.roblox.com/v1/presence/users"
                     async with session.post(presence_url, json={"userIds": [user_id]}, timeout=10) as response:
@@ -189,10 +203,12 @@ class RobloxTrackerBot(commands.Bot):
                                                     
                                                     embed = discord.Embed(
                                                         title="🟢 ONLINE - Playing Game",
-                                                       description=f"**Player:** {username}\n**Faction:** {faction}\n**Game:** **{game_name}**\n**Status:** ONLINE (Duration: 0m)",
+                                                        description=f"**Player:** {username}\n**Faction:** {faction}\n**Game:** **{game_name}**\n**Status:** ONLINE (Duration: {duration_str})",
                                                         color=5814783
                                                     )
-                                                    embed.add_field(name="Direct Join", value=f"[👉 Click Here to Join Game]({click_to_join})")
+                                                    if avatar_url:
+                                                        embed.set_thumbnail(url=avatar_url) # <--- Adds the avatar headshot to the top right corner
+                                                    embed.add_field(name="Direct Join", value=f"[👉 Click Here to Join Game]({click_to_join})") 
                                                     
                                                     ping_text = f"<@&{role_id}>! " if role_id else ""
                                                     msg = await channel.send(content=f"{ping_text}Targeted player **{username}** is now active!", embed=embed)
@@ -234,6 +250,8 @@ class RobloxTrackerBot(commands.Bot):
                                                     description=f"**Player:** {username}\n**Status:** OFFLINE",
                                                     color=15158332
                                                 )
+                                                if avatar_url:
+                                                    embed.set_thumbnail(url=avatar_url) # <--- Adds the avatar headshot here too
                                                 await channel.send(embed=embed)
                                                 
                                         if user_id in active_alert_messages:
