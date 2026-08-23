@@ -172,12 +172,18 @@ class RobloxTrackerBot(commands.Bot):
                                     active_place = current_place_id
                                     old_place = last_played_place.get(user_id)
 
+                                    # Set session start time if not already playing
+                                    if user_id not in session_start_times or old_place is None:
+                                        session_start_times[user_id] = now
+                                        
+                                    # Calculate duration string safely every loop tick
+                                    duration_seconds = int(now - session_start_times.get(user_id, now))
+                                    hours, remainder = divmod(duration_seconds, 3600)
+                                    minutes = remainder // 60
+                                    duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
                                     # If they just joined or switched games
                                     if active_place and old_place != active_place:
-                                        # Set session start time if not already playing
-                                        if user_id not in session_start_times or old_place is None:
-                                            session_start_times[user_id] = now
-                                            
                                         if last_location and last_location.strip() and last_location != "Website":
                                             game_name = last_location
                                         else:
@@ -185,7 +191,7 @@ class RobloxTrackerBot(commands.Bot):
                                             
                                         last_played_place[user_id] = active_place
                                         
-                                        # Broadcast ONLINE alert with session tracking to relevant servers
+                                        # Broadcast ONLINE alert to relevant servers
                                         for server_cfg in servers_list:
                                             target_place_id = server_cfg.get("place_id")
                                             should_alert = (target_place_id is None) or (current_place_id == target_place_id or root_place_id == target_place_id)
@@ -207,7 +213,7 @@ class RobloxTrackerBot(commands.Bot):
                                                         color=5814783
                                                     )
                                                     if avatar_url:
-                                                        embed.set_thumbnail(url=avatar_url) # <--- Adds the avatar headshot to the top right corner
+                                                        embed.set_thumbnail(url=avatar_url)
                                                     embed.add_field(name="Direct Join", value=f"[👉 Click Here to Join Game]({click_to_join})") 
                                                     
                                                     ping_text = f"<@&{role_id}>! " if role_id else ""
@@ -216,24 +222,6 @@ class RobloxTrackerBot(commands.Bot):
                                                     if user_id not in active_alert_messages:
                                                         active_alert_messages[user_id] = {}
                                                     active_alert_messages[user_id][server_cfg.get("guild_id")] = msg
-
-                                    # If they are still playing, we can calculate how long they've been online
-                                    elif user_id in session_start_times:
-                                        duration_seconds = int(now - session_start_times[user_id])
-                                        hours, remainder = divmod(duration_seconds, 3600)
-                                        minutes = remainder // 60
-                                        duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
-                                        
-                                        # Optional: Update existing embeds live with the new duration string
-                                        if user_id in active_alert_messages:
-                                            for guild_id, msg in active_alert_messages[user_id].items():
-                                                try:
-                                                    # Fetch and update embed description dynamically
-                                                    embed = msg.embeds[0]
-                                                    # Rebuild description with updated duration string
-                                                    # (A clean way is keeping base data or parsing it)
-                                                except Exception:
-                                                    pass
 
                                 else:
                                     # User left the game (Now OFFLINE / Website)
@@ -251,7 +239,7 @@ class RobloxTrackerBot(commands.Bot):
                                                     color=15158332
                                                 )
                                                 if avatar_url:
-                                                    embed.set_thumbnail(url=avatar_url) # <--- Adds the avatar headshot here too
+                                                    embed.set_thumbnail(url=avatar_url)
                                                 await channel.send(embed=embed)
                                                 
                                         if user_id in active_alert_messages:
