@@ -176,8 +176,8 @@ class RobloxTrackerBot(commands.Bot):
                                     if user_id not in session_start_times or old_place is None:
                                         session_start_times[user_id] = now
                                         
-                                    # Calculate duration string safely every loop tick
-                                    duration_seconds = int(now - session_start_times.get(user_id, now))
+                                    # Calculate current session duration
+                                    duration_seconds = int(now - session_start_times[user_id])
                                     hours, remainder = divmod(duration_seconds, 3600)
                                     minutes = remainder // 60
                                     duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
@@ -222,6 +222,20 @@ class RobloxTrackerBot(commands.Bot):
                                                     if user_id not in active_alert_messages:
                                                         active_alert_messages[user_id] = {}
                                                     active_alert_messages[user_id][server_cfg.get("guild_id")] = msg
+
+                                    # If they are continuing to play, dynamically update the existing Discord message duration!
+                                    elif user_id in active_alert_messages:
+                                        for guild_id, msg in list(active_alert_messages[user_id].items()):
+                                            try:
+                                                embed = msg.embeds[0]
+                                                # Keep old game info/faction, just swap out the duration line
+                                                lines = embed.description.split("\n")
+                                                # Rebuild description with updated duration string
+                                                updated_desc = f"**Player:** {username}\n**Faction:** {lines[1].split(': ')[1]}\n**Game:** {lines[2].split(': ')[1]}\n**Status:** ONLINE (Duration: {duration_str})"
+                                                embed.description = updated_desc
+                                                await msg.edit(embed=embed)
+                                            except Exception as ex:
+                                                print(f"Error updating duration message: {ex}")
 
                                 else:
                                     # User left the game (Now OFFLINE / Website)
