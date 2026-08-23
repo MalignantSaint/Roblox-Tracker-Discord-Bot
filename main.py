@@ -66,9 +66,10 @@ collection = db["users"]
 TRACKED_USERS = {} 
 last_played_place = {}
 # Track session start timestamps (user_id: timestamp)
+# Track session start timestamps and active message references cleanly
 session_start_times = {}
-# Track the sent Discord message objects so we can update them if needed (optional, or we send a new log when they leave)
 active_alert_messages = {} # {user_id: {guild_id: message_object}}
+active_session_data = {}   # {user_id: {"username": ..., "faction": ..., "game_name": ...}}
 username_cache = {}
 game_name_cache = {}
 
@@ -182,6 +183,48 @@ class RobloxTrackerBot(commands.Bot):
                                     minutes = remainder // 60
                                     duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
+    @tasks.loop(seconds=60)
+    async def monitor_loop(self):
+        async with aiohttp.ClientSession() as session:
+            try:
+                for user_id, servers_list in list(TRACKED_USERS.items()):
+                    if not servers_list:
+                        continue
+                        
+                    username = await self.get_username(session, user_id)
+                    avatar_url = await self.get_avatar_thumbnail(session, user_id)
+                    
+                    presence_url = "https://presence.roblox.com/v1/presence/users"
+                    async with session.post(presence_url, json={"userIds": [user_id]}, timeout=10) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            presences = data.get("userPresences", [])
+                            
+                            if presences:
+                                user_status = presences[0]
+                                presence_type = user_status.get("userPresenceType")
+                                current_place_id = user_status.get("placeId")
+                                root_place_id = user_status.get("rootPlaceId")
+                                game_instance_id = user_status.get("gameId")
+                                last_location = user_status.get("lastLocation", "")
+                                
+                                now = time.time()
+                                
+                                # presence_type 2 means "In Game"
+                                if presence_type == 2:
+                                    active_place = current_place_id
+                                    old_place = last_played_place.get(user_id)
+
+                                    # Set session start time if not already playing
+                                    if user_id not in session_start_times or old_place is None:
+                                        session_start_times[user_id] = now
+                                        
+                                    # Calculate current session duration
+                                    duration_seconds = int(now - session_start_times[user_id])
+                                    hours, remainder = divmod(duration_seconds, 3600)
+                                    minutes = remainder // 60
+                                    duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
                                     # If they just joined or switched games
                                     if active_place and old_place != active_place:
                                         if last_location and last_location.strip() and last_location != "Website":
@@ -190,6 +233,14 @@ class RobloxTrackerBot(commands.Bot):
                                             game_name = await self.get_game_name(session, active_place)
                                             
                                         last_played_place[user_id] = active_place
+                                        
+                                        # Save session metadata for live updating later
+                                        active_session_data[user_id] = {
+                                            "username": username,
+                                            "game_name": game_name,
+                                            "active_place": active_place,
+                                            "game_instance_id": game_instance_id
+                                        }
                                         
                                         # Broadcast ONLINE alert to relevant servers
                                         for server_cfg in servers_list:
@@ -224,24 +275,33 @@ class RobloxTrackerBot(commands.Bot):
                                                     active_alert_messages[user_id][server_cfg.get("guild_id")] = msg
 
                                     # If they are continuing to play, dynamically update the existing Discord message duration!
-                                    elif user_id in active_alert_messages:
-                                        for guild_id, msg in list(active_alert_messages[user_id].items()):
-                                            try:
-                                                embed = msg.embeds[0]
-                                                # Keep old game info/faction, just swap out the duration line
-                                                lines = embed.description.split("\n")
-                                                # Rebuild description with updated duration string
-                                                updated_desc = f"**Player:** {username}\n**Faction:** {lines[1].split(': ')[1]}\n**Game:** {lines[2].split(': ')[1]}\n**Status:** ONLINE (Duration: {duration_str})"
-                                                embed.description = updated_desc
-                                                await msg.edit(embed=embed)
-                                            except Exception as ex:
-                                                print(f"Error updating duration message: {ex}")
+                                    elif user_id in active_alert_messages and user_id in active_session_data:
+                                        s_data = active_session_data[user_id]
+                                        for server_cfg in servers_list:
+                                            guild_id = server_cfg.get("guild_id")
+                                            if guild_id in active_alert_messages[user_id]:
+                                                msg = active_alert_messages[user_id][guild_id]
+                                                try:
+                                                    faction = server_cfg.get("faction", "Unassigned")
+                                                    embed = msg.embeds[0]
+                                                    
+                                                    # Rebuild clean description using stored metadata
+                                                    embed.description = (
+                                                        f"**Player:** {s_data['username']}\n"
+                                                        f"**Faction:** {faction}\n"
+                                                        f"**Game:** **{s_data['game_name']}**\n"
+                                                        f"**Status:** ONLINE (Duration: {duration_str})"
+                                                    )
+                                                    await msg.edit(embed=embed)
+                                                except Exception as ex:
+                                                    print(f"Error updating duration message for guild {guild_id}: {ex}")
 
                                 else:
                                     # User left the game (Now OFFLINE / Website)
                                     if last_played_place.get(user_id) is not None:
                                         last_played_place[user_id] = None
                                         session_start_times.pop(user_id, None)
+                                        active_session_data.pop(user_id, None)
                                         
                                         # Send an OFFLINE notification to channels tracking them
                                         for server_cfg in servers_list:
@@ -262,10 +322,32 @@ class RobloxTrackerBot(commands.Bot):
                         elif response.status == 429:
                             await asyncio.sleep(120)
             except Exception as e:
-                print(f"Error in monitor loop: {e}")
+                print(f"Error in monitor loop: {e}")                                # If they just joined or switched games
+                                    if active_place and old_place != active_place:
+                                        if last_location and last_location.strip() and last_location != "Website":
+                                            game_name = last_location
+                                        else:
+                                            game_name = await self.get_game_name(session, active_place)
+                                            
+                                        last_played_place[user_id] = active_place
+                                        
+                                        # Broadcast ONLINE alert to relevant servers
+                                        for server_cfg in servers_list:
+                                            target_place_id = server_cfg.get("place_id")
+                                            should_alert = (target_place_id is None) or (current_place_id == target_place_id or root_place_id == target_place_id)
 
-bot = RobloxTrackerBot()
-
+                                            if should_alert:
+                                                channel = self.get_channel(server_cfg.get("channel_id"))
+                                                if channel:
+                                                    faction = server_cfg.get("faction", "Unassigned")
+                                                    role_id = server_cfg.get("role_id")
+                                                    
+                                                    if game_instance_id and active_place:
+                                                        click_to_join = f"{SERVER_DOMAIN}/join?placeId={active_place}&gameInstanceId={game_instance_id}"
+                                                    else:
+                                                        click_to_join = f"https://www.roblox.com/games/{active_place}"
+                                                    
+    
 # === CUSTOM CHECK FOR BOT MANAGER ROLE ===
 def is_bot_manager():
     async def predicate(interaction: discord.Interaction) -> bool:
