@@ -1,4 +1,4 @@
-import asyncio
+.import asyncio
 import os
 from threading import Thread
 import aiohttp
@@ -215,17 +215,17 @@ class RobloxTrackerBot(commands.Bot):
                                     active_place = current_place_id
                                     old_place = last_played_place.get(user_id)
 
-                                    # Set session start time if not already playing
+                                    # 1. FIX: Only set the start time if they were previously NOT playing (old_place is None or 0)
                                     if user_id not in session_start_times or old_place is None:
-                                        session_start_times[user_id] = now
-                                        
-                                    # Calculate current session duration
-                                    duration_seconds = int(now - session_start_times[user_id])
+                                        session_start_times[user_id] = time.time()
+
+                                    # 2. Always calculate duration safely from that fixed start timestamp
+                                    duration_seconds = int(time.time() - session_start_times[user_id])
                                     hours, remainder = divmod(duration_seconds, 3600)
                                     minutes = remainder // 60
                                     duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
-                                    # If they just joined or switched games
+                                    # If they just joined or switched games for the first time
                                     if active_place and old_place != active_place:
                                         if last_location and last_location.strip() and last_location != "Website":
                                             game_name = last_location
@@ -234,7 +234,7 @@ class RobloxTrackerBot(commands.Bot):
                                             
                                         last_played_place[user_id] = active_place
                                         
-                                        # Save session metadata for live updating later
+                                        # Save session metadata for live updating
                                         active_session_data[user_id] = {
                                             "username": username,
                                             "game_name": game_name,
@@ -274,7 +274,7 @@ class RobloxTrackerBot(commands.Bot):
                                                         active_alert_messages[user_id] = {}
                                                     active_alert_messages[user_id][server_cfg.get("guild_id")] = msg
 
-                                    # If they are continuing to play, dynamically update the existing Discord message duration!
+                                    # If they are continuing to play in the same game, update the message duration live
                                     elif user_id in active_alert_messages and user_id in active_session_data:
                                         s_data = active_session_data[user_id]
                                         for server_cfg in servers_list:
@@ -285,7 +285,6 @@ class RobloxTrackerBot(commands.Bot):
                                                     faction = server_cfg.get("faction", "Unassigned")
                                                     embed = msg.embeds[0]
                                                     
-                                                    # Rebuild clean description using stored metadata
                                                     embed.description = (
                                                         f"**Player:** {s_data['username']}\n"
                                                         f"**Faction:** {faction}\n"
@@ -295,7 +294,6 @@ class RobloxTrackerBot(commands.Bot):
                                                     await msg.edit(embed=embed)
                                                 except Exception as ex:
                                                     print(f"Error updating duration message for guild {guild_id}: {ex}")
-
                                 else:
                                     # User left the game (Now OFFLINE / Website)
                                     if last_played_place.get(user_id) is not None:
