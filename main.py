@@ -138,6 +138,8 @@ class RobloxTrackerBot(commands.Bot):
                     if not servers_list:
                         continue
                         
+                    await asyncio.sleep(1.5)
+  
                     username = await self.get_username(session, user_id)
                     avatar_url = await self.get_avatar_thumbnail(session, user_id)
                     
