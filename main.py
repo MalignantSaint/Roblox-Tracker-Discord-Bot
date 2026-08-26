@@ -186,10 +186,8 @@ class RobloxTrackerBot(commands.Bot):
                                 
                                 # presence_type 2 means "In Game"
                                 if presence_type == 2 and active_place:
-                                    # Fetch accurate game name using place ID directly
                                     game_name = await self.get_game_name(session, active_place)
                                     
-                                    # Initialize timer if starting a new session
                                     if not was_playing or user_id not in session_start_times:
                                         session_start_times[user_id] = time.time()
                                         last_played_place[user_id] = active_place
@@ -199,7 +197,7 @@ class RobloxTrackerBot(commands.Bot):
                                     minutes = remainder // 60
                                     duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
-                                    # If they just transitioned from offline to online, or changed games
+                                    # Check if they changed games or came online
                                     if not was_playing or last_played_place.get(user_id) != active_place:
                                         last_played_place[user_id] = active_place
                                         
@@ -241,12 +239,12 @@ class RobloxTrackerBot(commands.Bot):
                                                         active_alert_messages[user_id] = {}
                                                     active_alert_messages[user_id][server_cfg.get("guild_id")] = msg
 
-                                    # Otherwise, live-update the duration message if it exists
+                                    # Live-update duration if already active and alerts exist
                                     elif user_id in active_alert_messages and user_id in active_session_data:
                                         s_data = active_session_data[user_id]
                                         for server_cfg in servers_list:
                                             guild_id = server_cfg.get("guild_id")
-                                            if guild_id in active_alert_messages[user_id]:
+                                            if user_id in active_alert_messages and guild_id in active_alert_messages[user_id]:
                                                 msg = active_alert_messages[user_id][guild_id]
                                                 try:
                                                     faction = server_cfg.get("faction", "Unassigned")
@@ -262,17 +260,13 @@ class RobloxTrackerBot(commands.Bot):
                                                     print(f"Error updating duration message for guild {guild_id}: {ex}")
 
                                 else:
-                                    # User is NOT in the targeted mode, but let's check if they went completely offline (type 0) 
-                                    # or just website/menu (type 1), vs switching to another game (type 2)
-                                    
-                                    if presence_type != 2:
-                                        # They are genuinely offline or browsing the website menu
-                                        if was_playing:
-                                            last_played_place[user_id] = None
-                                            session_start_times.pop(user_id, None)
-                                            active_session_data.pop(user_id, None)
-                                            
-                                            for server_cfg in servers_list:
+                                    # User is NOT playing an active game session (Offline, website, or non-targeted game)
+                                    # ONLY send offline if active alert messages actually exist for this user in that server
+                                    if was_playing:
+                                        for server_cfg in servers_list:
+                                            guild_id = server_cfg.get("guild_id")
+                                            # Check if this specific guild had an active online message sent
+                                            if user_id in active_alert_messages and guild_id in active_alert_messages[user_id]:
                                                 channel = self.get_channel(server_cfg.get("channel_id"))
                                                 if channel:
                                                     embed = discord.Embed(
@@ -283,16 +277,14 @@ class RobloxTrackerBot(commands.Bot):
                                                     if avatar_url:
                                                         embed.set_thumbnail(url=avatar_url)
                                                     await channel.send(embed=embed)
-                                                    
-                                            if user_id in active_alert_messages:
-                                                active_alert_messages.pop(user_id, None)
-                                    else:
-                                        # They ARE playing a game, but it's a different game than the targeted one.
-                                        # We clear active alert messages for the old targeted game view so it doesn't stay stuck live-updating.
+                                        
+                                        # Clear tracking state now that the session has wrapped up
+                                        last_played_place[user_id] = None
+                                        session_start_times.pop(user_id, None)
+                                        active_session_data.pop(user_id, None)
                                         if user_id in active_alert_messages:
                                             active_alert_messages.pop(user_id, None)
-                                        last_played_place[user_id] = active_place
-                                        
+
                         elif response.status == 429:
                             await asyncio.sleep(120)
             except Exception as e:
