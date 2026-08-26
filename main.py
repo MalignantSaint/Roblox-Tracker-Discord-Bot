@@ -188,29 +188,7 @@ class RobloxTrackerBot(commands.Bot):
                                 if presence_type == 2 and active_place:
                                     # Fetch accurate game name using place ID directly
                                     game_name = await self.get_game_name(session, active_place)
-                                else:
-                                    # User is NOT playing the target game
-                                    # Only send an offline alert if they WERE previously playing
-                                    if last_played_place.get(user_id) is not None:
-                                        last_played_place[user_id] = None  # Clear state so it only runs ONCE
-                                        session_start_times.pop(user_id, None)
-                                        active_session_data.pop(user_id, None)
-                                        
-                                        for server_cfg in servers_list:
-                                            channel = self.get_channel(server_cfg.get("channel_id"))
-                                            if channel:
-                                                embed = discord.Embed(
-                                                    title="🔴 OFFLINE",
-                                                    description=f"**Player:** {username}\n**Status:** OFFLINE",
-                                                    color=15158332
-                                                )
-                                                if avatar_url:
-                                                    embed.set_thumbnail(url=avatar_url)
-                                                await channel.send(embed=embed)
-                                                
-                                        if user_id in active_alert_messages:
-                                            active_alert_messages.pop(user_id, None)
-                                            
+                                    
                                     # Initialize timer if starting a new session
                                     if not was_playing or user_id not in session_start_times:
                                         session_start_times[user_id] = time.time()
