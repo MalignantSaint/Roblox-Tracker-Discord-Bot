@@ -189,10 +189,10 @@ class RobloxTrackerBot(commands.Bot):
                                     # Fetch accurate game name using place ID directly
                                     game_name = await self.get_game_name(session, active_place)
                                 else:
-                                    # User left the game or went offline
+                                    # User is NOT playing the target game
+                                    # Only send an offline alert if they WERE previously playing
                                     if last_played_place.get(user_id) is not None:
-                                        # Clear their active session memory immediately
-                                        last_played_place[user_id] = None
+                                        last_played_place[user_id] = None  # Clear state so it only runs ONCE
                                         session_start_times.pop(user_id, None)
                                         active_session_data.pop(user_id, None)
                                         
@@ -210,9 +210,7 @@ class RobloxTrackerBot(commands.Bot):
                                                 
                                         if user_id in active_alert_messages:
                                             active_alert_messages.pop(user_id, None)
-                                                
-                                        if user_id in active_alert_messages:
-                                            active_alert_messages.pop(user_id, None)
+                                            
                                     # Initialize timer if starting a new session
                                     if not was_playing or user_id not in session_start_times:
                                         session_start_times[user_id] = time.time()
