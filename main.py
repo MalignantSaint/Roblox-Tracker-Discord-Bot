@@ -262,28 +262,37 @@ class RobloxTrackerBot(commands.Bot):
                                                     print(f"Error updating duration message for guild {guild_id}: {ex}")
 
                                 else:
-                                    # User is NOT in-game (Offline, on website, or menu)
-                                    if was_playing:
-                                        # Clear state so it only triggers once per offline event
-                                        last_played_place[user_id] = None
-                                        session_start_times.pop(user_id, None)
-                                        active_session_data.pop(user_id, None)
-                                        
-                                        for server_cfg in servers_list:
-                                            channel = self.get_channel(server_cfg.get("channel_id"))
-                                            if channel:
-                                                embed = discord.Embed(
-                                                    title="🔴 OFFLINE",
-                                                    description=f"**Player:** {username}\n**Status:** OFFLINE",
-                                                    color=15158332
-                                                )
-                                                if avatar_url:
-                                                    embed.set_thumbnail(url=avatar_url)
-                                                await channel.send(embed=embed)
-                                                
+                                    # User is NOT in the targeted mode, but let's check if they went completely offline (type 0) 
+                                    # or just website/menu (type 1), vs switching to another game (type 2)
+                                    
+                                    if presence_type != 2:
+                                        # They are genuinely offline or browsing the website menu
+                                        if was_playing:
+                                            last_played_place[user_id] = None
+                                            session_start_times.pop(user_id, None)
+                                            active_session_data.pop(user_id, None)
+                                            
+                                            for server_cfg in servers_list:
+                                                channel = self.get_channel(server_cfg.get("channel_id"))
+                                                if channel:
+                                                    embed = discord.Embed(
+                                                        title="🔴 OFFLINE",
+                                                        description=f"**Player:** {username}\n**Status:** OFFLINE",
+                                                        color=15158332
+                                                    )
+                                                    if avatar_url:
+                                                        embed.set_thumbnail(url=avatar_url)
+                                                    await channel.send(embed=embed)
+                                                    
+                                            if user_id in active_alert_messages:
+                                                active_alert_messages.pop(user_id, None)
+                                    else:
+                                        # They ARE playing a game, but it's a different game than the targeted one.
+                                        # We clear active alert messages for the old targeted game view so it doesn't stay stuck live-updating.
                                         if user_id in active_alert_messages:
                                             active_alert_messages.pop(user_id, None)
-
+                                        last_played_place[user_id] = active_place
+                                        
                         elif response.status == 429:
                             await asyncio.sleep(120)
             except Exception as e:
