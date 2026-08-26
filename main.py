@@ -189,8 +189,9 @@ class RobloxTrackerBot(commands.Bot):
                                     # Fetch accurate game name using place ID directly
                                     game_name = await self.get_game_name(session, active_place)
                                 else:
-                                    # User left the game or went completely offline
+                                    # User left the game or went offline
                                     if last_played_place.get(user_id) is not None:
+                                        # Clear their active session memory immediately
                                         last_played_place[user_id] = None
                                         session_start_times.pop(user_id, None)
                                         active_session_data.pop(user_id, None)
@@ -206,6 +207,9 @@ class RobloxTrackerBot(commands.Bot):
                                                 if avatar_url:
                                                     embed.set_thumbnail(url=avatar_url)
                                                 await channel.send(embed=embed)
+                                                
+                                        if user_id in active_alert_messages:
+                                            active_alert_messages.pop(user_id, None)
                                                 
                                         if user_id in active_alert_messages:
                                             active_alert_messages.pop(user_id, None)
