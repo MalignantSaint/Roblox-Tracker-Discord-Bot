@@ -138,7 +138,6 @@ class RobloxTrackerBot(commands.Bot):
                     if not servers_list:
                         continue
                         
-                    # Pacing delay to prevent Discord global rate limits (Error 429)
                     await asyncio.sleep(1.5)
                     
                     username = await self.get_username(session, user_id)
@@ -156,27 +155,27 @@ class RobloxTrackerBot(commands.Bot):
                                 current_place_id = user_status.get("placeId")
                                 root_place_id = user_status.get("rootPlaceId")
                                 game_instance_id = user_status.get("gameId")
-                                last_location = user_status.get("lastLocation", "")
+                                
+                                active_place = current_place_id or root_place_id
+                                was_playing = last_played_place.get(user_id) is not None
                                 
                                 # presence_type 2 means "In Game"
-                                if presence_type == 2:
-                                    active_place = current_place_id or root_place_id
-                                    old_place = last_played_place.get(user_id)
-
-                                    # Start timer if they weren't previously playing
-                                    if user_id not in session_start_times or old_place is None:
+                                if presence_type == 2 and active_place:
+                                    # Fetch accurate game name using place ID directly
+                                    game_name = await self.get_game_name(session, active_place)
+                                    
+                                    # Initialize timer if starting a new session
+                                    if not was_playing or user_id not in session_start_times:
                                         session_start_times[user_id] = time.time()
+                                        last_played_place[user_id] = active_place
 
                                     duration_seconds = int(time.time() - session_start_times[user_id])
                                     hours, remainder = divmod(duration_seconds, 3600)
                                     minutes = remainder // 60
                                     duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
-                                    # Fetch correct game name (prioritizing active place details over old string metadata)
-                                    game_name = await self.get_game_name(session, active_place)
-
-                                    # If they just joined or switched games
-                                    if active_place and old_place != active_place:
+                                    # If they just transitioned from offline to online, or changed games
+                                    if not was_playing or last_played_place.get(user_id) != active_place:
                                         last_played_place[user_id] = active_place
                                         
                                         active_session_data[user_id] = {
@@ -217,7 +216,7 @@ class RobloxTrackerBot(commands.Bot):
                                                         active_alert_messages[user_id] = {}
                                                     active_alert_messages[user_id][server_cfg.get("guild_id")] = msg
 
-                                    # Live-update duration if already playing
+                                    # Otherwise, live-update the duration message if it exists
                                     elif user_id in active_alert_messages and user_id in active_session_data:
                                         s_data = active_session_data[user_id]
                                         for server_cfg in servers_list:
@@ -238,8 +237,9 @@ class RobloxTrackerBot(commands.Bot):
                                                     print(f"Error updating duration message for guild {guild_id}: {ex}")
 
                                 else:
-                                    # User left the game (Now OFFLINE) - only trigger if they were previously recorded as playing
-                                    if last_played_place.get(user_id) is not None:
+                                    # User is NOT in-game (Offline, on website, or menu)
+                                    if was_playing:
+                                        # Clear state so it only triggers once per offline event
                                         last_played_place[user_id] = None
                                         session_start_times.pop(user_id, None)
                                         active_session_data.pop(user_id, None)
