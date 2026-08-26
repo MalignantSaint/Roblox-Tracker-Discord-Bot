@@ -78,10 +78,34 @@ class RobloxTrackerBot(commands.Bot):
         async for document in cursor:
             user_id = int(document["_id"])
             TRACKED_USERS[user_id] = document.get("servers", [])
-            last_played_place[user_id] = None
             
+        # 💡 Baseline state check on startup to prevent false offline/online alerts
+        async with aiohttp.ClientSession() as session:
+            for user_id in TRACKED_USERS.keys():
+                try:
+                    presence_url = "https://presence.roblox.com/v1/presence/users"
+                    async with session.post(presence_url, json={"userIds": [user_id]}, timeout=10) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            presences = data.get("userPresences", [])
+                            if presences:
+                                user_status = presences[0]
+                                if user_status.get("userPresenceType") == 2:
+                                    # If they are already playing, lock in their current place ID silently
+                                    current_place = user_status.get("placeId") or user_status.get("rootPlaceId")
+                                    last_played_place[user_id] = current_place
+                                    session_start_times[user_id] = time.time()
+                                else:
+                                    # If they are offline, keep it explicitly None
+                                    last_played_place[user_id] = None
+                except Exception as e:
+                    print(f"Error initializing state for user {user_id}: {e}")
+                
+                # Small pause to avoid hitting rate limits during startup check
+                await asyncio.sleep(1)
+
         await self.tree.sync()
-        print(f"[INFO] Slash commands synced. Loaded {len(TRACKED_USERS)} users from database.")
+        print(f"[INFO] Slash commands synced. Initialized {len(TRACKED_USERS)} users from database.")
         self.monitor_loop.start()
 
     async def get_username(self, session, user_id):
