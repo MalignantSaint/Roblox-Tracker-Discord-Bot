@@ -109,10 +109,11 @@ class RobloxTrackerBot(commands.Bot):
             async with session.get(url, timeout=10) as res:
                 if res.status == 200:
                     data = await res.json()
-                    if data and len(data) > 0:
-                        name = data[0].get("name", f"Place {place_id}")
-                        game_name_cache[place_id] = name
-                        return name
+                    if data and isinstance(data, list) and len(data) > 0:
+                        name = data[0].get("name")
+                        if name:
+                            game_name_cache[place_id] = name
+                            return name
         except Exception as e:
             print(f"Error fetching game name for Place ID {place_id}: {e}")
         return f"Place {place_id}"
