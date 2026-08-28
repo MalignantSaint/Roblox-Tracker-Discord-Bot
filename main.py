@@ -261,24 +261,45 @@ class RobloxTrackerBot(commands.Bot):
 
                                 else:
                                     # User is NOT playing an active game session (Offline, website, or non-targeted game)
-                                    # ONLY send offline if active alert messages actually exist for this user in that server
+                                    # Instead of sending a new message, edit the existing online embeds to show OFFLINE with the final time, and stop tracking them
                                     if was_playing:
-                                        for server_cfg in servers_list:
-                                            guild_id = server_cfg.get("guild_id")
-                                            # Check if this specific guild had an active online message sent
-                                            if user_id in active_alert_messages and guild_id in active_alert_messages[user_id]:
-                                                channel = self.get_channel(server_cfg.get("channel_id"))
-                                                if channel:
-                                                    embed = discord.Embed(
-                                                        title="🔴 OFFLINE",
-                                                        description=f"**Player:** {username}\n**Status:** OFFLINE",
-                                                        color=15158332
-                                                    )
-                                                    if avatar_url:
-                                                        embed.set_thumbnail(url=avatar_url)
-                                                    await channel.send(embed=embed)
+                                        if user_id in active_session_data and user_id in session_start_times:
+                                            # Compute final static duration string before they went offline
+                                            duration_seconds = int(time.time() - session_start_times[user_id])
+                                            hours, remainder = divmod(duration_seconds, 3600)
+                                            minutes = remainder // 60
+                                            duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+                                            
+                                            s_data = active_session_data[user_id]
+                                            for server_cfg in servers_list:
+                                                guild_id = server_cfg.get("guild_id")
+                                                if user_id in active_alert_messages and guild_id in active_alert_messages[user_id]:
+                                                    msg = active_alert_messages[user_id][guild_id]
+                                                    try:
+                                                        faction = server_cfg.get("faction", "Unassigned")
+                                                        embed = msg.embeds[0]
+                                                        
+                                                        # Switch title to offline/red style or keep format as requested
+                                                        embed.title = "🔴 OFFLINE"
+                                                        embed.color = 15158332
+                                                        
+                                                        # Replace 'ONLINE' with 'OFFLINE' in the status/duration line while keeping the final time
+                                                        embed.description = (
+                                                            f"**Player:** {s_data['username']}\n"
+                                                            f"**Faction:** {faction}\n"
+                                                            f"**Game:** **{s_data['game_name']}**\n"
+                                                            f"**Status:** OFFLINE (Duration: {duration_str})"
+                                                        )
+                                                        
+                                                        # Remove direct join field since they are offline
+                                                        embed.clear_fields()
+                                                        
+                                                        # Edit message and clear ping text if any
+                                                        await msg.edit(content=f"Player **{s_data['username']}** is now offline.", embed=embed)
+                                                    except Exception as ex:
+                                                        print(f"Error editing final offline message for guild {guild_id}: {ex}")
                                         
-                                        # Clear tracking state now that the session has wrapped up
+                                        # Clear tracking state now that the session has wrapped up completely
                                         last_played_place[user_id] = None
                                         session_start_times.pop(user_id, None)
                                         active_session_data.pop(user_id, None)
@@ -331,7 +352,7 @@ async def set_manager_role(interaction: discord.Interaction, role: discord.Role)
         upsert=True
     )
     await interaction.followup.send(
-        f"✅ Successfully set the bot manager role to {role.mention}.",
+        f"✅ Successfully set the bot manager role to {role to {role.mention}.",
         ephemeral=True
     )
 
