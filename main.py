@@ -261,10 +261,9 @@ class RobloxTrackerBot(commands.Bot):
 
                                 else:
                                     # User is NOT playing an active game session (Offline, website, or non-targeted game)
-                                    # Instead of sending a new message, edit the existing online embeds to show OFFLINE with the final time, and stop tracking them
+                                    # Edit existing online messages to show OFFLINE with final duration, then lock tracking out.
                                     if was_playing:
                                         if user_id in active_session_data and user_id in session_start_times:
-                                            # Compute final static duration string before they went offline
                                             duration_seconds = int(time.time() - session_start_times[user_id])
                                             hours, remainder = divmod(duration_seconds, 3600)
                                             minutes = remainder // 60
@@ -279,27 +278,21 @@ class RobloxTrackerBot(commands.Bot):
                                                         faction = server_cfg.get("faction", "Unassigned")
                                                         embed = msg.embeds[0]
                                                         
-                                                        # Switch title to offline/red style or keep format as requested
                                                         embed.title = "🔴 OFFLINE"
                                                         embed.color = 15158332
-                                                        
-                                                        # Replace 'ONLINE' with 'OFFLINE' in the status/duration line while keeping the final time
                                                         embed.description = (
                                                             f"**Player:** {s_data['username']}\n"
                                                             f"**Faction:** {faction}\n"
                                                             f"**Game:** **{s_data['game_name']}**\n"
                                                             f"**Status:** OFFLINE (Duration: {duration_str})"
                                                         )
-                                                        
-                                                        # Remove direct join field since they are offline
                                                         embed.clear_fields()
                                                         
-                                                        # Edit message and clear ping text if any
                                                         await msg.edit(content=f"Player **{s_data['username']}** is now offline.", embed=embed)
                                                     except Exception as ex:
                                                         print(f"Error editing final offline message for guild {guild_id}: {ex}")
                                         
-                                        # Clear tracking state now that the session has wrapped up completely
+                                        # Clear tracking state so it won't trigger or update anymore
                                         last_played_place[user_id] = None
                                         session_start_times.pop(user_id, None)
                                         active_session_data.pop(user_id, None)
@@ -310,6 +303,7 @@ class RobloxTrackerBot(commands.Bot):
                             await asyncio.sleep(120)
             except Exception as e:
                 print(f"Error in monitor loop: {e}")
+
 bot = RobloxTrackerBot()
 
 # === CUSTOM CHECK FOR BOT MANAGER ROLE ===
@@ -352,7 +346,7 @@ async def set_manager_role(interaction: discord.Interaction, role: discord.Role)
         upsert=True
     )
     await interaction.followup.send(
-        f"✅ Successfully set the bot manager role to {role to {role.mention}.",
+        f"✅ Successfully set the bot manager role to {role.mention}.",
         ephemeral=True
     )
 
