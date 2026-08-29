@@ -261,7 +261,7 @@ class RobloxTrackerBot(commands.Bot):
 
                                 else:
                                     # User is NOT playing an active game session (Offline, website, or non-targeted game)
-                                    # Edit existing online messages to show OFFLINE with final duration, then lock tracking out.
+                                    # Edit existing online messages to show OFFLINE with final duration using game_name instead of place ID, and lock tracking.
                                     if was_playing:
                                         if user_id in active_session_data and user_id in session_start_times:
                                             duration_seconds = int(time.time() - session_start_times[user_id])
@@ -463,7 +463,7 @@ async def list_tracked(interaction: discord.Interaction):
         embed = discord.Embed(title="📋 Tracked Roblox Users (This Server)", description=summary, color=3447003)
         await interaction.followup.send(embed=embed, ephemeral=True)
     else:
-        await interaction.followup.send("No users are currently being tracked in this specific server.", ephemeral=True)
+        await interaction.main.followup.send("No users are currently being tracked in this specific server.", ephemeral=True)
 
 if __name__ == "__main__":
     Thread(target=run_web_server, daemon=True).start()
