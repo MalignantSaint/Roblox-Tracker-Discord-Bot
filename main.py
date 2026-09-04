@@ -91,18 +91,19 @@ class RobloxTrackerBot(commands.Bot):
                             if presences:
                                 user_status = presences[0]
                                 if user_status.get("userPresenceType") == 2:
-                                    # If they are already playing, lock in their current place ID silently
                                     current_place = user_status.get("placeId") or user_status.get("rootPlaceId")
                                     last_played_place[user_id] = current_place
                                     session_start_times[user_id] = time.time()
                                 else:
-                                    # If they are offline, keep it explicitly None
                                     last_played_place[user_id] = None
+                        elif response.status == 429:
+                            print("[WARNING] Rate limited during startup initialization. Sleeping for 30s...")
+                            await asyncio.sleep(30)
                 except Exception as e:
                     print(f"Error initializing state for user {user_id}: {e}")
                 
-                # Small pause to avoid hitting rate limits during startup check
-                await asyncio.sleep(1)
+                # Increased pause to prevent hammering APIs on startup
+                await asyncio.sleep(2.5)
 
         await self.tree.sync()
         print(f"[INFO] Slash commands synced. Initialized {len(TRACKED_USERS)} users from database.")
@@ -163,7 +164,7 @@ class RobloxTrackerBot(commands.Bot):
                     if not servers_list:
                         continue
                         
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(3.0)  # Increased interval between user checks to stay safe from rate limits
                     
                     username = await self.get_username(session, user_id)
                     avatar_url = await self.get_avatar_thumbnail(session, user_id)
@@ -298,9 +299,16 @@ class RobloxTrackerBot(commands.Bot):
                                         active_session_data.pop(user_id, None)
                                         if user_id in active_alert_messages:
                                             active_alert_messages.pop(user_id, None)
-
+                            pass
                         elif response.status == 429:
-                            await asyncio.sleep(120)
+                            print("[WARNING] Hit Discord/API global rate limit (429). Pausing monitoring loop temporarily.")
+                            await asyncio.sleep(180)  # Back off for 3 minutes to let the block clear
+            except discord.HTTPException as he:
+                if he.status == 429:
+                    print("[ERROR] Encountered Discord 429 Rate Limit. Backing off.")
+                    await asyncio.sleep(300)
+                else:
+                    print(f"Discord HTTP Exception in monitor loop: {he}")
             except Exception as e:
                 print(f"Error in monitor loop: {e}")
 
