@@ -84,6 +84,9 @@ class RobloxTrackerBot(commands.Bot):
         intents.members = True
         super().__init__(command_prefix="!", intents=intents)
 
+    async def on_ready(self):
+    logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
+    
     async def setup_hook(self):
         global TRACKED_USERS
 
