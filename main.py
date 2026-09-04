@@ -492,4 +492,60 @@ async def track_user(
         ephemeral=True
     )
 
-@bot.tree.command(name="untrack
+@bot.tree.command(name="untrack", description="Stop tracking a Roblox user in THIS server")
+@app_commands.describe(user_id="The numeric Roblox User ID to remove")
+@is_bot_manager()
+async def untrack_user(interaction: discord.Interaction, user_id: int):
+    if user_id in TRACKED_USERS:
+        original_length = len(TRACKED_USERS[user_id])
+        TRACKED_USERS[user_id] = [cfg for cfg in TRACKED_USERS[user_id] if cfg.get("guild_id") != interaction.guild_id]
+        
+        if len(TRACKED_USERS[user_id]) < original_length:
+            if len(TRACKED_USERS[user_id]) == 0:
+                del TRACKED_USERS[user_id]
+                last_played_place.pop(user_id, None)
+                await collection.delete_one({"_id": user_id})
+            else:
+                await collection.update_one({"_id": user_id}, {"$set": {"servers": TRACKED_USERS[user_id]}})
+                
+            await interaction.response.send_message(f"❌ Stopped tracking user ID `{user_id}` in this server.", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"⚠️ User ID `{user_id}` wasn't tracked in this server.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"⚠️ User ID `{user_id}` is not currently being tracked at all.", ephemeral=True)
+
+@bot.tree.command(name="list_tracked", description="View tracked users for THIS server")
+async def list_tracked(interaction: discord.Interaction):
+    if not TRACKED_USERS:
+        await interaction.response.send_message("No users are currently being tracked.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    async with aiohttp.ClientSession() as session:
+        lines = []
+        for uid, servers_list in TRACKED_USERS.items():
+            for cfg in servers_list:
+                if cfg.get("guild_id") == interaction.guild_id:
+                    username = await bot.get_username(session, uid)
+                    game_name = cfg.get("game_name", "Any Game")
+                    ch_id = cfg.get("channel_id")
+                    r_id = cfg.get("role_id")
+                    
+                    role_display = f"<@&{r_id}>" if r_id else "None"
+                    channel_display = f"<#{ch_id}>" if ch_id else "Unknown"
+                    
+                    lines.append(
+                        f"• **{username}** (`{uid}`) | **Faction:** {cfg.get('faction', 'Unassigned')} | **Game:** **{game_name}** | **Channel:** {channel_display} | **Role:** {role_display}"
+                    )
+
+    if lines:
+        summary = "\n".join(lines)
+        embed = discord.Embed(title="📋 Tracked Roblox Users (This Server)", description=summary, color=3447003)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    else:
+        await interaction.followup.send("No users are currently being tracked in this specific server.", ephemeral=True)
+
+if __name__ == "__main__":
+    Thread(target=run_web_server, daemon=True).start()
+    bot.run(DISCORD_TOKEN)
