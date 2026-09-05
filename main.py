@@ -365,8 +365,15 @@ class RobloxTrackerBot(commands.Bot):
                                                 active_alert_messages.pop(user_id, None)
 
                             elif response.status == 429:
-                                logger.warning("Hit Roblox presence API rate limit (429). Pausing monitoring loop temporarily.")
-                                await asyncio.sleep(180)
+                                # REPLACE THIS PART to respect Roblox's dynamic backoff
+                                retry_after = 180
+                                try:
+                                    data = await response.json()
+                                    retry_after = data.get("retryAfter", 180)
+                                except Exception:
+                                    pass
+                                logger.warning(f"Hit Roblox presence API rate limit (429). Pausing loop for {retry_after}s...")
+                                await asyncio.sleep(float(retry_after))
                             else:
                                 logger.debug("Unexpected presence API status %s for user %s", response.status, user_id)
                     except asyncio.TimeoutError:
