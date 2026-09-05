@@ -125,8 +125,14 @@ class RobloxTrackerBot(commands.Bot):
                                     else:
                                         last_played_place[u_id] = None
                             elif response.status == 429:
-                                logger.warning("Rate limited during startup initialization. Sleeping for 30s...")
-                                await asyncio.sleep(30)
+                                retry_after = 30
+                                try:
+                                    data = await response.json()
+                                    retry_after = data.get("retryAfter", 30)
+                                except Exception:
+                                    pass
+                                logger.warning(f"Rate limited during startup initialization. Sleeping for {retry_after}s...")
+                                await asyncio.sleep(float(retry_after))
                             else:
                                 # Non-200 status: log for debugging but continue
                                 logger.warning("Unexpected status %s from presence API during startup", response.status)
