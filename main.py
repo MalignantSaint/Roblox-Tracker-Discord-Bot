@@ -35,6 +35,7 @@ if not MONGO_URL:
 cluster = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URL)
 db = cluster["roblox_tracker"]
 collection = db["users"]
+games_collection = db["tracked_games"]
 
 # === FLASK SERVER ===
 app = Flask("")
