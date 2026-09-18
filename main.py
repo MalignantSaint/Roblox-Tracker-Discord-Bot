@@ -151,6 +151,8 @@ class RobloxTrackerBot(commands.Bot):
 
         if not self.monitor_loop.is_running():
             self.monitor_loop.start()
+        if not self.monitor_game_updates.is_running():
+            self.monitor_game_updates.start()
 
     async def get_username(self, session, user_id):
         key = int(user_id)
@@ -208,6 +210,93 @@ class RobloxTrackerBot(commands.Bot):
             logger.exception("Error fetching avatar thumbnail for %s: %s", user_id, e)
         return None
 
+    # === BACKGROUND TASK: GAME UPDATE MONITOR ===
+    @tasks.loop(minutes=5)  # Check every 5 minutes (adjust as needed to avoid rate limits)
+    async def monitor_game_updates(self):
+        async with aiohttp.ClientSession() as session:
+            try:
+                # Fetch all unique tracked places across all servers
+                cursor = games_collection.find({})
+                tracked_docs = await cursor.to_list(length=None)
+            
+                if not tracked_docs:
+                    return
+
+                for doc in tracked_docs:
+                    place_id = doc["place_id"]
+                    guild_id = doc["guild_id"]
+                    channel_id = doc["channel_id"]
+                    stored_last_updated = doc.get("last_updated", 0)
+                    stored_prev_updated = doc.get("previous_updated", 0)
+
+                    # Fetch place details from Roblox API
+                    url = f"https://games.roblox.com/v1/games/multiget-place-details?placeIds={place_id}"
+                    async with session.get(url, timeout=10) as res:
+                        if res.status == 200:
+                            data = await res.json()
+                            if data and isinstance(data, list) and len(data) > 0:
+                                place_info = data[0]
+                                game_name = place_info.get("name", "Unknown Game")
+                                updated_iso = place_info.get("updated") # e.g. "2026-03-30T12:00:00Z"
+                            
+                                if not updated_iso:
+                                    continue
+
+                                # Convert ISO string to Unix timestamp
+                                from datetime import datetime
+                                dt = datetime.fromisoformat(updated_iso.replace("Z", "+00:00"))
+                                current_timestamp = int(dt.timestamp())
+
+                            # Check if an update occurred
+                                if stored_last_updated == 0:
+                                # First time seeing this game, initialize baseline
+                                    await games_collection.update_one(
+                                        {"place_id": place_id, "guild_id": guild_id},
+                                        {"$set": {"last_updated": current_timestamp, "previous_updated": current_timestamp, "game_name": game_name}}
+                                    )
+                                elif current_timestamp > stored_last_updated:
+                                # A NEW UPDATE WAS DETECTED!
+                                    prev_timestamp = stored_last_updated
+                                    new_timestamp = current_timestamp
+
+                                # Update database with new timestamps
+                                    await games_collection.update_one(
+                                        {"place_id": place_id, "guild_id": guild_id},
+                                        {"$set": {"last_updated": new_timestamp, "previous_updated": prev_timestamp, "game_name": game_name}}
+                                    )
+
+                                # Format the message exactly as requested
+                                    message_content = (
+                                        f"🚨 PLACE UPDATED - {game_name}\n"
+                                        f"Game Info\n"
+                                        f"`Game Name:` {game_name}\n"
+                                        f"[Game Link](https://roblox.com/games/{place_id}/)\n"
+                                        f"Update Info\n"
+                                        f"`Last updated -` (<t:{new_timestamp}:R>) <t:{new_timestamp}:f>\n"
+                                        f"`Recently updated -` (<t:{prev_timestamp}:R>) <t:{prev_timestamp}:f>"
+                                    )
+
+                                # Send to the configured Discord channel
+                                    channel = self.get_channel(channel_id)
+                                    if not channel:
+                                        try:
+                                            channel = await self.fetch_channel(channel_id)
+                                        except Exception:
+                                            continue
+                                
+                                    try:
+                                        await channel.send(message_content)
+                                    except Exception as e:
+                                        logger.exception("Failed to send update alert: %s", e)
+
+                        await asyncio.sleep(2.0) # Rate limit protection between requests
+            except Exception as e:
+                        logger.exception("Error in monitor_game_updates loop: %s", e)
+
+    @monitor_game_updates.before_loop
+    async def before_game_updates(self):
+        await self.wait_until_ready()
+    
     @tasks.loop(seconds=90)  # Increased from 60s to 90s to naturally lower request frequency
     async def monitor_loop(self):
         async with aiohttp.ClientSession() as session:
@@ -453,6 +542,61 @@ async def set_manager_role_error(interaction: discord.Interaction, error):
         await interaction.response.send_message("⚠️ You need **Administrator** permissions to set the bot manager role.", ephemeral=True)
 
 # === SLASH COMMANDS ===
+@bot.tree.command(name="track_game_updates", description="Track a Roblox game for update notifications in this server")
+@app_commands.describe(
+    place_id="The numeric Roblox Place ID",
+    channel="The Discord channel to send update alerts to"
+)
+@is_bot_manager()
+async def track_game_updates(interaction: discord.Interaction, place_id: int, channel: discord.TextChannel):
+    await interaction.response.defer(ephemeral=True)
+
+    # Fetch game name initially
+    async with aiohttp.ClientSession() as session:
+        game_name = await bot.get_game_name(session, place_id)
+        
+        # Get current update timestamp from Roblox API
+        url = f"https://games.roblox.com/v1/games/multiget-place-details?placeIds={place_id}"
+        current_timestamp = int(time.time())
+        async with session.get(url, timeout=10) as res:
+            if res.status == 200:
+                data = await res.json()
+                if data and isinstance(data, list) and len(data) > 0:
+                    updated_iso = data[0].get("updated")
+                    if updated_iso:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(updated_iso.replace("Z", "+00:00"))
+                        current_timestamp = int(dt.timestamp())
+
+    # Save to MongoDB
+    await games_collection.update_one(
+        {"place_id": place_id, "guild_id": interaction.guild_id},
+        {
+            "$set": {
+                "channel_id": channel.id,
+                "game_name": game_name,
+                "last_updated": current_timestamp,
+                "previous_updated": current_timestamp
+            }
+        },
+        upsert=True
+    )
+
+    await interaction.followup.send(
+        f"✅ Now tracking updates for **{game_name}** (`{place_id}`) in {channel.mention}.",
+        ephemeral=True
+    )
+
+@bot.tree.command(name="untrack_game_updates", description="Stop tracking a Roblox game's updates in this server")
+@app_commands.describe(place_id="The numeric Roblox Place ID to remove")
+@is_bot_manager()
+async def untrack_game_updates(interaction: discord.Interaction, place_id: int):
+    result = await games_collection.delete_one({"place_id": place_id, "guild_id": interaction.guild_id})
+    if result.deleted_count > 0:
+        await interaction.response.send_message(f"❌ Stopped tracking updates for Place ID `{place_id}`.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"⚠️ Place ID `{place_id}` was not being tracked in this server.", ephemeral=True)
+
 @bot.tree.command(name="track", description="Add or update a Roblox user to track for THIS server")
 @app_commands.describe(
     user_id="The numeric Roblox User ID",
