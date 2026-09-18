@@ -587,6 +587,40 @@ async def track_game_updates(interaction: discord.Interaction, place_id: int, ch
         ephemeral=True
     )
 
+@bot.tree.command(name="list_tracked_games", description="View Roblox games being tracked for updates in THIS server")
+async def list_tracked_games(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
+    # Fetch tracked games for this specific guild from MongoDB
+    cursor = games_collection.find({"guild_id": interaction.guild_id})
+    tracked_games = await cursor.to_list(length=None)
+
+    if not tracked_games:
+        await interaction.followup.send("No game updates are currently being tracked in this server.", ephemeral=True)
+        return
+
+    lines = []
+    for doc in tracked_games:
+        place_id = doc.get("place_id")
+        game_name = doc.get("game_name", "Unknown Game")
+        channel_id = doc.get("channel_id")
+        channel_display = f"<#{channel_id}>" if channel_id else "Unknown"
+        
+        last_timestamp = doc.get("last_updated", 0)
+        time_display = f"<t:{last_timestamp}:R>" if last_timestamp else "Never"
+
+        lines.append(
+            f"• **{game_name}** (`{place_id}`) | **Channel:** {channel_display} | **Last Updated:** {time_display}"
+        )
+
+    summary = "\n".join(lines)
+    embed = discord.Embed(
+        title="📋 Tracked Game Updates (This Server)",
+        description=summary,
+        color=3447003
+    )
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
 @bot.tree.command(name="untrack_game_updates", description="Stop tracking a Roblox game's updates in this server")
 @app_commands.describe(place_id="The numeric Roblox Place ID to remove")
 @is_bot_manager()
