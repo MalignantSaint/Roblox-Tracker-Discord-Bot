@@ -211,11 +211,10 @@ class RobloxTrackerBot(commands.Bot):
         return None
 
     # === BACKGROUND TASK: GAME UPDATE MONITOR ===
-    @tasks.loop(minutes=5)  # Check every 5 minutes (adjust as needed to avoid rate limits)
+    @tasks.loop(minutes=5)
     async def monitor_game_updates(self):
         async with aiohttp.ClientSession() as session:
             try:
-                # Fetch all unique tracked places across all servers
                 cursor = games_collection.find({})
                 tracked_docs = await cursor.to_list(length=None)
             
@@ -227,9 +226,7 @@ class RobloxTrackerBot(commands.Bot):
                     guild_id = doc["guild_id"]
                     channel_id = doc["channel_id"]
                     stored_last_updated = doc.get("last_updated", 0)
-                    stored_prev_updated = doc.get("previous_updated", 0)
 
-                    # Fetch place details from Roblox API
                     url = f"https://games.roblox.com/v1/games/multiget-place-details?placeIds={place_id}"
                     async with session.get(url, timeout=10) as res:
                         if res.status == 200:
@@ -237,35 +234,31 @@ class RobloxTrackerBot(commands.Bot):
                             if data and isinstance(data, list) and len(data) > 0:
                                 place_info = data[0]
                                 game_name = place_info.get("name", "Unknown Game")
-                                updated_iso = place_info.get("updated") # e.g. "2026-03-30T12:00:00Z"
+                                updated_iso = place_info.get("updated")
                             
                                 if not updated_iso:
                                     continue
 
-                                # Convert ISO string to Unix timestamp
                                 from datetime import datetime
                                 dt = datetime.fromisoformat(updated_iso.replace("Z", "+00:00"))
                                 current_timestamp = int(dt.timestamp())
 
-                            # Check if an update occurred
+                                # If it's the first time checking or database is empty, initialize it
                                 if stored_last_updated == 0:
-                                # First time seeing this game, initialize baseline
                                     await games_collection.update_one(
                                         {"place_id": place_id, "guild_id": guild_id},
                                         {"$set": {"last_updated": current_timestamp, "previous_updated": current_timestamp, "game_name": game_name}}
                                     )
                                 elif current_timestamp > stored_last_updated:
-                                # A NEW UPDATE WAS DETECTED!
+                                    # Update detected! Use stored_last_updated as the previous time
                                     prev_timestamp = stored_last_updated
                                     new_timestamp = current_timestamp
 
-                                # Update database with new timestamps
                                     await games_collection.update_one(
                                         {"place_id": place_id, "guild_id": guild_id},
                                         {"$set": {"last_updated": new_timestamp, "previous_updated": prev_timestamp, "game_name": game_name}}
                                     )
 
-                                # Format the message exactly as requested
                                     message_content = (
                                         f"🚨 PLACE UPDATED - {game_name}\n"
                                         f"Game Info\n"
@@ -276,22 +269,21 @@ class RobloxTrackerBot(commands.Bot):
                                         f"`Recently updated -` (<t:{prev_timestamp}:R>) <t:{prev_timestamp}:f>"
                                     )
 
-                                # Send to the configured Discord channel
                                     channel = self.get_channel(channel_id)
                                     if not channel:
                                         try:
                                             channel = await self.fetch_channel(channel_id)
                                         except Exception:
                                             continue
-                                
+                                    
                                     try:
                                         await channel.send(message_content)
                                     except Exception as e:
                                         logger.exception("Failed to send update alert: %s", e)
 
-                        await asyncio.sleep(2.0) # Rate limit protection between requests
+                    await asyncio.sleep(2.0)
             except Exception as e:
-                        logger.exception("Error in monitor_game_updates loop: %s", e)
+                logger.exception("Error in monitor_game_updates loop: %s", e)
 
     @monitor_game_updates.before_loop
     async def before_game_updates(self):
