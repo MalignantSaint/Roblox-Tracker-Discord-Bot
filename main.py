@@ -194,6 +194,26 @@ class RobloxTrackerBot(commands.Bot):
             logger.exception("Error fetching game name for Place ID %s: %s", place_id, e)
         return f"Place {place_id}"
 
+    async def get_game_details(place_id, session):
+        # Step 1: Get Universe ID from Place ID
+        universe_url = f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
+        async with session.get(universe_url) as res:
+            if res.status != 200:
+                print(f"[DEBUG] Universe API Error. Status code: {res.status}")
+                return None
+            universe_data = await res.json()
+            universe_id = universe_data.get("universeId")
+
+        # Step 2: Get Game Details from Universe ID
+        games_url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
+        async with session.get(games_url) as res:
+            if res.status != 200:
+                print(f"[DEBUG] Games API Error. Status code: {res.status}")
+                return None
+            games_data = await res.json()
+            if games_data.get("data"):
+                return games_data["data"][0] # Contains 'updated' timestamp, 'name', etc.
+
     async def get_avatar_thumbnail(self, session, user_id):
         try:
             key = int(user_id)
