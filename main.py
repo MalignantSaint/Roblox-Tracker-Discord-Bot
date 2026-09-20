@@ -283,8 +283,8 @@ class RobloxTrackerBot(commands.Bot):
 
                     await asyncio.sleep(2.0)
             except Exception as e:
-                logger.exception("Error in monitor_game_updates loop: %s", e)
-'''
+                logger.exception("Error in monitor_game_updates loop: %s", e) '''
+
     # === BACKGROUND TASK: GAME UPDATE MONITOR (DEBUG MODE) ===
     @tasks.loop(seconds=30) # Sped up for testing
     async def monitor_game_updates(self):
