@@ -179,21 +179,32 @@ class RobloxTrackerBot(commands.Bot):
         if key in game_name_cache:
             return game_name_cache[key]
         try:
-            url = f"https://games.roblox.com/v1/games/multiget-place-details?placeIds={key}"
-            async with session.get(url, timeout=10) as res:
-                if res.status == 200:
-                    data = await res.json()
-                    if data and isinstance(data, list) and len(data) > 0:
-                        name = data[0].get("name")
-                        if name:
-                            game_name_cache[key] = name
-                            return name
+            # Step 1: Place to Universe
+            universe_url = f"https://apis.roblox.com/universes/v1/places/{key}/universe"
+            async with session.get(universe_url, timeout=10) as uni_res:
+                if uni_res.status == 200:
+                    uni_data = await uni_res.json()
+                    universe_id = uni_data.get("universeId")
+                    
+                    if universe_id:
+                        # Step 2: Universe to Game Details
+                        games_url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
+                        async with session.get(games_url, timeout=10) as res:
+                            if res.status == 200:
+                                data = await res.json()
+                                if data and data.get("data") and len(data["data"]) > 0:
+                                    name = data["data"][0].get("name")
+                                    if name:
+                                        game_name_cache[key] = name
+                                        return name
+                            else:
+                                logger.debug("Non-200 from public games API for %s: %s", key, res.status)
                 else:
-                    logger.debug("Non-200 from games API for %s: %s", key, res.status)
+                    logger.debug("Non-200 from universe API for %s: %s", key, uni_res.status)
         except Exception as e:
             logger.exception("Error fetching game name for Place ID %s: %s", place_id, e)
         return f"Place {place_id}"
-
+        
     async def get_game_details(place_id, session):
         # Step 1: Get Universe ID from Place ID
         universe_url = f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
@@ -306,16 +317,16 @@ class RobloxTrackerBot(commands.Bot):
                 logger.exception("Error in monitor_game_updates loop: %s", e) '''
 
     # === BACKGROUND TASK: GAME UPDATE MONITOR (DEBUG MODE) ===
-    @tasks.loop(seconds=30) # Sped up for testing
+    @tasks.loop(seconds=30)
     async def monitor_game_updates(self):
-        logger.info("\n[DEBUG] --- Starting Game Update Check ---")
+        logger.info("--- Starting Game Update Check ---")
         async with aiohttp.ClientSession() as session:
             try:
                 cursor = games_collection.find({})
                 tracked_docs = await cursor.to_list(length=None)
             
                 if not tracked_docs:
-                    logger.info("[DEBUG] No games found in database to track.")
+                    logger.info("No games found in database to track.")
                     return
 
                 for doc in tracked_docs:
@@ -324,38 +335,53 @@ class RobloxTrackerBot(commands.Bot):
                     channel_id = doc.get("channel_id")
                     stored_last_updated = doc.get("last_updated", 0)
 
-                    logger.info(f"[DEBUG] Checking Place ID: {place_id} | Stored DB Time: {stored_last_updated} | Channel ID: {channel_id}")
+                    logger.info(f"Checking Place ID: {place_id} | Stored DB Time: {stored_last_updated} | Channel ID: {channel_id}")
 
-                    url = f"https://games.roblox.com/v1/games/multiget-place-details?placeIds={place_id}"
-                    async with session.get(url, timeout=10) as res:
+                    # Step 1: Place ID to Universe ID
+                    universe_url = f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
+                    async with session.get(universe_url, timeout=10) as uni_res:
+                        if uni_res.status != 200:
+                            logger.error(f"Universe API Error. Status code: {uni_res.status}")
+                            continue
+                        
+                        uni_data = await uni_res.json()
+                        universe_id = uni_data.get("universeId")
+
+                        if not universe_id:
+                            logger.error(f"Failed to get Universe ID for Place {place_id}")
+                            continue
+
+                    # Step 2: Universe ID to Game Details
+                    games_url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
+                    async with session.get(games_url, timeout=10) as res:
                         if res.status == 200:
                             data = await res.json()
-                            if not data or len(data) == 0:
-                                logger.info(f"[DEBUG] Roblox API returned EMPTY data for Place {place_id}. Is this a Universe ID?")
+                            if not data.get("data") or len(data["data"]) == 0:
+                                logger.info(f"Roblox API returned EMPTY data for Universe {universe_id}.")
                                 continue
 
-                            place_info = data[0]
+                            place_info = data["data"][0]
                             game_name = place_info.get("name", "Unknown Game")
                             updated_iso = place_info.get("updated")
                         
                             if not updated_iso:
-                                logger.info(f"[DEBUG] No 'updated' timestamp found in API response for {game_name}")
+                                logger.info(f"No 'updated' timestamp found in API response for {game_name}")
                                 continue
 
                             from datetime import datetime
                             dt = datetime.fromisoformat(updated_iso.replace("Z", "+00:00"))
                             current_timestamp = int(dt.timestamp())
 
-                            logger.info(f"[DEBUG] API Time for {game_name}: {current_timestamp}")
+                            logger.info(f"API Time for {game_name}: {current_timestamp}")
 
                             if stored_last_updated == 0:
-                                logger.info("[DEBUG] Initializing game (0 detected).")
+                                logger.info("Initializing game (0 detected).")
                                 await games_collection.update_one(
                                     {"place_id": place_id, "guild_id": guild_id},
                                     {"$set": {"last_updated": current_timestamp, "previous_updated": current_timestamp, "game_name": game_name}}
                                 )
                             elif current_timestamp > stored_last_updated:
-                                logger.info(f"[DEBUG] UPDATE DETECTED! {current_timestamp} > {stored_last_updated}")
+                                logger.info(f"UPDATE DETECTED! {current_timestamp} > {stored_last_updated}")
                                 prev_timestamp = stored_last_updated
                                 new_timestamp = current_timestamp
 
@@ -369,7 +395,7 @@ class RobloxTrackerBot(commands.Bot):
                                     try:
                                         channel = await self.fetch_channel(int(channel_id))
                                     except Exception as e:
-                                        logger.info(f"[DEBUG] CRITICAL ERROR: Could not find or fetch Discord channel {channel_id}. Error: {e}")
+                                        logger.error(f"CRITICAL ERROR: Could not find or fetch Discord channel {channel_id}. Error: {e}")
                                         continue
                                 
                                 message_content = (
@@ -383,20 +409,20 @@ class RobloxTrackerBot(commands.Bot):
                                 )
 
                                 try:
-                                    logger.info(f"[DEBUG] Attempting to send message to channel {channel.name}...")
+                                    logger.info(f"Attempting to send message to channel {channel.name}...")
                                     await channel.send(message_content)
-                                    logger.info("[DEBUG] Message sent successfully!")
+                                    logger.info("Message sent successfully!")
                                 except Exception as e:
-                                    logger.info(f"[DEBUG] Failed to send discord message: {e}")
+                                    logger.error(f"Failed to send discord message: {e}")
                             else:
-                                logger.info("[DEBUG] No new update. Timestamps match.")
+                                logger.info("No new update. Timestamps match.")
                         else:
-                            logger.info(f"[DEBUG] API Error. Status code: {res.status}")
+                            logger.error(f"API Error. Status code: {res.status}")
 
                     await asyncio.sleep(2.0)
             except Exception as e:
-                logger.info(f"[DEBUG] Error in loop: {e}")
-
+                logger.error(f"Error in loop: {e}")
+                
     @monitor_game_updates.before_loop
     async def before_game_updates(self):
         await self.wait_until_ready()
@@ -655,22 +681,29 @@ async def set_manager_role_error(interaction: discord.Interaction, error):
 async def track_game_updates(interaction: discord.Interaction, place_id: int, channel: discord.TextChannel):
     await interaction.response.defer(ephemeral=True)
 
-    # Fetch game name initially
     async with aiohttp.ClientSession() as session:
         game_name = await bot.get_game_name(session, place_id)
-        
-        # Get current update timestamp from Roblox API
-        url = f"https://games.roblox.com/v1/games/multiget-place-details?placeIds={place_id}"
         current_timestamp = int(time.time())
-        async with session.get(url, timeout=10) as res:
-            if res.status == 200:
-                data = await res.json()
-                if data and isinstance(data, list) and len(data) > 0:
-                    updated_iso = data[0].get("updated")
-                    if updated_iso:
-                        from datetime import datetime
-                        dt = datetime.fromisoformat(updated_iso.replace("Z", "+00:00"))
-                        current_timestamp = int(dt.timestamp())
+        
+        # Step 1: Place ID to Universe ID
+        universe_url = f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
+        async with session.get(universe_url, timeout=10) as uni_res:
+            if uni_res.status == 200:
+                uni_data = await uni_res.json()
+                universe_id = uni_data.get("universeId")
+                
+                if universe_id:
+                    # Step 2: Get initial update timestamp
+                    games_url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
+                    async with session.get(games_url, timeout=10) as res:
+                        if res.status == 200:
+                            data = await res.json()
+                            if data and data.get("data") and len(data["data"]) > 0:
+                                updated_iso = data["data"][0].get("updated")
+                                if updated_iso:
+                                    from datetime import datetime
+                                    dt = datetime.fromisoformat(updated_iso.replace("Z", "+00:00"))
+                                    current_timestamp = int(dt.timestamp())
 
     # Save to MongoDB
     await games_collection.update_one(
