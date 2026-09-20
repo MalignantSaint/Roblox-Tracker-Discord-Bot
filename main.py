@@ -210,7 +210,7 @@ class RobloxTrackerBot(commands.Bot):
             logger.exception("Error fetching avatar thumbnail for %s: %s", user_id, e)
         return None
 
-'''    # === BACKGROUND TASK: GAME UPDATE MONITOR ===
+    '''# === BACKGROUND TASK: GAME UPDATE MONITOR ===
     @tasks.loop(minutes=5)
     async def monitor_game_updates(self):
         async with aiohttp.ClientSession() as session:
