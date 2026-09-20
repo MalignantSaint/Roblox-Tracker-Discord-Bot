@@ -178,10 +178,13 @@ class RobloxTrackerBot(commands.Bot):
         key = int(place_id)
         if key in game_name_cache:
             return game_name_cache[key]
+        
+        cookies = {".ROBLOSECURITY": os.getenv("ROBLOSECURITY")} if os.getenv("ROBLOSECURITY") else {}
+        
         try:
             # Step 1: Place to Universe
             universe_url = f"https://apis.roblox.com/universes/v1/places/{key}/universe"
-            async with session.get(universe_url, timeout=10) as uni_res:
+            async with session.get(universe_url, cookies=cookies, timeout=10) as uni_res:
                 if uni_res.status == 200:
                     uni_data = await uni_res.json()
                     universe_id = uni_data.get("universeId")
@@ -189,7 +192,7 @@ class RobloxTrackerBot(commands.Bot):
                     if universe_id:
                         # Step 2: Universe to Game Details
                         games_url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
-                        async with session.get(games_url, timeout=10) as res:
+                        async with session.get(games_url, cookies=cookies, timeout=10) as res:
                             if res.status == 200:
                                 data = await res.json()
                                 if data and data.get("data") and len(data["data"]) > 0:
@@ -320,6 +323,8 @@ class RobloxTrackerBot(commands.Bot):
     @tasks.loop(minutes=5)
     async def monitor_game_updates(self):
         logger.info("--- Starting Game Update Check ---")
+        cookies = {".ROBLOSECURITY": os.getenv("ROBLOSECURITY")} if os.getenv("ROBLOSECURITY") else {}
+
         async with aiohttp.ClientSession() as session:
             try:
                 cursor = games_collection.find({})
@@ -339,7 +344,7 @@ class RobloxTrackerBot(commands.Bot):
 
                     # Step 1: Place ID to Universe ID
                     universe_url = f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
-                    async with session.get(universe_url, timeout=10) as uni_res:
+                    async with session.get(universe_url, cookies=cookies, timeout=10) as uni_res:
                         if uni_res.status != 200:
                             logger.error(f"Universe API Error. Status code: {uni_res.status}")
                             continue
@@ -353,7 +358,7 @@ class RobloxTrackerBot(commands.Bot):
 
                     # Step 2: Universe ID to Game Details
                     games_url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
-                    async with session.get(games_url, timeout=10) as res:
+                    async with session.get(games_url, cookies=cookies, timeout=10) as res:
                         if res.status == 200:
                             data = await res.json()
                             if not data.get("data") or len(data["data"]) == 0:
@@ -680,6 +685,7 @@ async def set_manager_role_error(interaction: discord.Interaction, error):
 @is_bot_manager()
 async def track_game_updates(interaction: discord.Interaction, place_id: int, channel: discord.TextChannel):
     await interaction.response.defer(ephemeral=True)
+    cookies = {".ROBLOSECURITY": os.getenv("ROBLOSECURITY")} if os.getenv("ROBLOSECURITY") else {}
 
     async with aiohttp.ClientSession() as session:
         game_name = await bot.get_game_name(session, place_id)
@@ -687,7 +693,7 @@ async def track_game_updates(interaction: discord.Interaction, place_id: int, ch
         
         # Step 1: Place ID to Universe ID
         universe_url = f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
-        async with session.get(universe_url, timeout=10) as uni_res:
+        async with session.get(universe_url, cookies=cookies, timeout=10) as uni_res:
             if uni_res.status == 200:
                 uni_data = await uni_res.json()
                 universe_id = uni_data.get("universeId")
@@ -695,7 +701,7 @@ async def track_game_updates(interaction: discord.Interaction, place_id: int, ch
                 if universe_id:
                     # Step 2: Get initial update timestamp
                     games_url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
-                    async with session.get(games_url, timeout=10) as res:
+                    async with session.get(games_url, cookies=cookies, timeout=10) as res:
                         if res.status == 200:
                             data = await res.json()
                             if data and data.get("data") and len(data["data"]) > 0:
@@ -723,7 +729,7 @@ async def track_game_updates(interaction: discord.Interaction, place_id: int, ch
         f"✅ Now tracking updates for **{game_name}** (`{place_id}`) in {channel.mention}.",
         ephemeral=True
     )
-
+    
 @bot.tree.command(name="list_tracked_games", description="View Roblox games being tracked for updates in THIS server")
 async def list_tracked_games(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
