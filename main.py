@@ -317,7 +317,7 @@ class RobloxTrackerBot(commands.Bot):
                 logger.exception("Error in monitor_game_updates loop: %s", e) '''
 
     # === BACKGROUND TASK: GAME UPDATE MONITOR (DEBUG MODE) ===
-    @tasks.loop(seconds=30)
+    @tasks.loop(minutes=5)
     async def monitor_game_updates(self):
         logger.info("--- Starting Game Update Check ---")
         async with aiohttp.ClientSession() as session:
