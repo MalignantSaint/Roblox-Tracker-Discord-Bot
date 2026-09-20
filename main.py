@@ -623,6 +623,28 @@ async def untrack_game_updates(interaction: discord.Interaction, place_id: int):
     else:
         await interaction.response.send_message(f"⚠️ Place ID `{place_id}` was not being tracked in this server.", ephemeral=True)
 
+@bot.tree.command(name="test_alert", description="Force an update alert test")
+@is_bot_manager()
+async def test_alert(interaction: discord.Interaction, channel: discord.TextChannel):
+    await interaction.response.send_message("Sending test...", ephemeral=True)
+    
+    current_time = int(time.time())
+    message_content = (
+        f"🚨 PLACE UPDATED - Test Game\n"
+        f"Game Info\n"
+        f"`Game Name:` Debug Test\n"
+        f"[Game Link](https://roblox.com/)\n"
+        f"Update Info\n"
+        f"`Last updated -` (<t:{current_time}:R>) <t:{current_time}:f>\n"
+        f"`Recently updated -` (<t:{current_time - 3600}:R>) <t:{current_time - 3600}:f>"
+    )
+    
+    try:
+        await channel.send(message_content)
+        await interaction.followup.send("Test message sent successfully!", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"Failed to send: {e}", ephemeral=True)
+
 @bot.tree.command(name="track", description="Add or update a Roblox user to track for THIS server")
 @app_commands.describe(
     user_id="The numeric Roblox User ID",
