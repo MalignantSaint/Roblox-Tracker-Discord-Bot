@@ -210,7 +210,7 @@ class RobloxTrackerBot(commands.Bot):
             logger.exception("Error fetching avatar thumbnail for %s: %s", user_id, e)
         return None
 
-    # === BACKGROUND TASK: GAME UPDATE MONITOR ===
+'''    # === BACKGROUND TASK: GAME UPDATE MONITOR ===
     @tasks.loop(minutes=5)
     async def monitor_game_updates(self):
         async with aiohttp.ClientSession() as session:
@@ -284,6 +284,98 @@ class RobloxTrackerBot(commands.Bot):
                     await asyncio.sleep(2.0)
             except Exception as e:
                 logger.exception("Error in monitor_game_updates loop: %s", e)
+'''
+    # === BACKGROUND TASK: GAME UPDATE MONITOR (DEBUG MODE) ===
+    @tasks.loop(seconds=30) # Sped up for testing
+    async def monitor_game_updates(self):
+        print("\n[DEBUG] --- Starting Game Update Check ---")
+        async with aiohttp.ClientSession() as session:
+            try:
+                cursor = games_collection.find({})
+                tracked_docs = await cursor.to_list(length=None)
+            
+                if not tracked_docs:
+                    print("[DEBUG] No games found in database to track.")
+                    return
+
+                for doc in tracked_docs:
+                    place_id = doc.get("place_id")
+                    guild_id = doc.get("guild_id")
+                    channel_id = doc.get("channel_id")
+                    stored_last_updated = doc.get("last_updated", 0)
+
+                    print(f"[DEBUG] Checking Place ID: {place_id} | Stored DB Time: {stored_last_updated} | Channel ID: {channel_id}")
+
+                    url = f"https://games.roblox.com/v1/games/multiget-place-details?placeIds={place_id}"
+                    async with session.get(url, timeout=10) as res:
+                        if res.status == 200:
+                            data = await res.json()
+                            if not data or len(data) == 0:
+                                print(f"[DEBUG] Roblox API returned EMPTY data for Place {place_id}. Is this a Universe ID?")
+                                continue
+
+                            place_info = data[0]
+                            game_name = place_info.get("name", "Unknown Game")
+                            updated_iso = place_info.get("updated")
+                        
+                            if not updated_iso:
+                                print(f"[DEBUG] No 'updated' timestamp found in API response for {game_name}")
+                                continue
+
+                            from datetime import datetime
+                            dt = datetime.fromisoformat(updated_iso.replace("Z", "+00:00"))
+                            current_timestamp = int(dt.timestamp())
+
+                            print(f"[DEBUG] API Time for {game_name}: {current_timestamp}")
+
+                            if stored_last_updated == 0:
+                                print("[DEBUG] Initializing game (0 detected).")
+                                await games_collection.update_one(
+                                    {"place_id": place_id, "guild_id": guild_id},
+                                    {"$set": {"last_updated": current_timestamp, "previous_updated": current_timestamp, "game_name": game_name}}
+                                )
+                            elif current_timestamp > stored_last_updated:
+                                print(f"[DEBUG] UPDATE DETECTED! {current_timestamp} > {stored_last_updated}")
+                                prev_timestamp = stored_last_updated
+                                new_timestamp = current_timestamp
+
+                                await games_collection.update_one(
+                                    {"place_id": place_id, "guild_id": guild_id},
+                                    {"$set": {"last_updated": new_timestamp, "previous_updated": prev_timestamp, "game_name": game_name}}
+                                )
+
+                                channel = self.get_channel(int(channel_id))
+                                if not channel:
+                                    try:
+                                        channel = await self.fetch_channel(int(channel_id))
+                                    except Exception as e:
+                                        print(f"[DEBUG] CRITICAL ERROR: Could not find or fetch Discord channel {channel_id}. Error: {e}")
+                                        continue
+                                
+                                message_content = (
+                                    f"🚨 PLACE UPDATED - {game_name}\n"
+                                    f"Game Info\n"
+                                    f"`Game Name:` {game_name}\n"
+                                    f"[Game Link](https://roblox.com/games/{place_id}/)\n"
+                                    f"Update Info\n"
+                                    f"`Last updated -` (<t:{new_timestamp}:R>) <t:{new_timestamp}:f>\n"
+                                    f"`Recently updated -` (<t:{prev_timestamp}:R>) <t:{prev_timestamp}:f>"
+                                )
+
+                                try:
+                                    print(f"[DEBUG] Attempting to send message to channel {channel.name}...")
+                                    await channel.send(message_content)
+                                    print("[DEBUG] Message sent successfully!")
+                                except Exception as e:
+                                    print(f"[DEBUG] Failed to send discord message: {e}")
+                            else:
+                                print("[DEBUG] No new update. Timestamps match.")
+                        else:
+                            print(f"[DEBUG] API Error. Status code: {res.status}")
+
+                    await asyncio.sleep(2.0)
+            except Exception as e:
+                print(f"[DEBUG] Error in loop: {e}")
 
     @monitor_game_updates.before_loop
     async def before_game_updates(self):
