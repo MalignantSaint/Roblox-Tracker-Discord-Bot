@@ -11,6 +11,7 @@ import motor.motor_asyncio
 from dotenv import load_dotenv
 import time
 import logging
+from discord.errors import HTTPException
 
 # Load environment variables from the .env file
 load_dotenv()
@@ -909,3 +910,20 @@ async def list_tracked(interaction: discord.Interaction):
 if __name__ == "__main__":
     Thread(target=run_web_server, daemon=True).start()
     bot.run(DISCORD_TOKEN)
+    max_retries = 5
+    retry_delay = 60  # seconds
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            bot.run(DISCORD_TOKEN)
+            break
+        except HTTPException as e:
+            if e.status == 429:
+                print(f"[429 Rate Limit] Cloudflare blocked login (Attempt {attempt}/{max_retries}). Retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                raise e
+        except Exception as e:
+            print(f"Unexpected shutdown error: {e}")
+            break
