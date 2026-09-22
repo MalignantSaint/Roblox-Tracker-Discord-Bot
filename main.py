@@ -99,18 +99,16 @@ class RobloxTrackerBot(commands.Bot):
                 try:
                     user_id = int(document["_id"])
                 except Exception:
-                    # If the stored _id isn't castable to int, skip with warning
                     logger.warning("Found non-int _id in users collection: %s", document.get("_id"))
                     continue
                 TRACKED_USERS[user_id] = document.get("servers", [])
         except Exception as e:
             logger.exception("Failed to load tracked users from DB: %s", e)
 
-        # Baseline state check on startup (batched to prevent API spam)
+        # Baseline state check on startup
         if TRACKED_USERS:
             user_ids = list(TRACKED_USERS.keys())
             async with aiohttp.ClientSession() as session:
-                # Roblox allows up to 100 user IDs per batch request
                 for i in range(0, len(user_ids), 100):
                     batch = user_ids[i:i+100]
                     try:
@@ -136,14 +134,13 @@ class RobloxTrackerBot(commands.Bot):
                                 logger.warning(f"Rate limited during startup initialization. Sleeping for {retry_after}s...")
                                 await asyncio.sleep(float(retry_after))
                             else:
-                                # Non-200 status: log for debugging but continue
                                 logger.warning("Unexpected status %s from presence API during startup", response.status)
                     except Exception as e:
                         logger.exception("Error initializing state batch: %s", e)
 
-                    await asyncio.sleep(2.0)  # Pause between batches
+                    await asyncio.sleep(2.0)
 
-        # Sync commands and start monitoring loop only once
+        # Sync commands and start monitoring loops
         try:
             await self.tree.sync()
             logger.info("Slash commands synced. Initialized %d users from database.", len(TRACKED_USERS))
@@ -167,8 +164,6 @@ class RobloxTrackerBot(commands.Bot):
                     name = data.get("name", str(key))
                     username_cache[key] = name
                     return name
-                else:
-                    logger.debug("Non-200 from users API for %s: %s", key, res.status)
         except Exception as e:
             logger.exception("Error fetching username for %s: %s", user_id, e)
         return str(key)
@@ -183,7 +178,6 @@ class RobloxTrackerBot(commands.Bot):
         cookies = {".ROBLOSECURITY": os.getenv("ROBLOSECURITY")} if os.getenv("ROBLOSECURITY") else {}
         
         try:
-            # Step 1: Place to Universe
             universe_url = f"https://apis.roblox.com/universes/v1/places/{key}/universe"
             async with session.get(universe_url, cookies=cookies, timeout=10) as uni_res:
                 if uni_res.status == 200:
@@ -191,7 +185,6 @@ class RobloxTrackerBot(commands.Bot):
                     universe_id = uni_data.get("universeId")
                     
                     if universe_id:
-                        # Step 2: Universe to Game Details
                         games_url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
                         async with session.get(games_url, cookies=cookies, timeout=10) as res:
                             if res.status == 200:
@@ -201,33 +194,9 @@ class RobloxTrackerBot(commands.Bot):
                                     if name:
                                         game_name_cache[key] = name
                                         return name
-                            else:
-                                logger.debug("Non-200 from public games API for %s: %s", key, res.status)
-                else:
-                    logger.debug("Non-200 from universe API for %s: %s", key, uni_res.status)
         except Exception as e:
             logger.exception("Error fetching game name for Place ID %s: %s", place_id, e)
         return f"Place {place_id}"
-        
-    async def get_game_details(place_id, session):
-        # Step 1: Get Universe ID from Place ID
-        universe_url = f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
-        async with session.get(universe_url) as res:
-            if res.status != 200:
-                print(f"[DEBUG] Universe API Error. Status code: {res.status}")
-                return None
-            universe_data = await res.json()
-            universe_id = universe_data.get("universeId")
-
-        # Step 2: Get Game Details from Universe ID
-        games_url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
-        async with session.get(games_url) as res:
-            if res.status != 200:
-                print(f"[DEBUG] Games API Error. Status code: {res.status}")
-                return None
-            games_data = await res.json()
-            if games_data.get("data"):
-                return games_data["data"][0] # Contains 'updated' timestamp, 'name', etc.
 
     async def get_avatar_thumbnail(self, session, user_id):
         try:
@@ -239,88 +208,10 @@ class RobloxTrackerBot(commands.Bot):
                     thumbnails = data.get("data", [])
                     if thumbnails:
                         return thumbnails[0].get("imageUrl", None)
-                else:
-                    logger.debug("Non-200 from thumbnails API for %s: %s", key, res.status)
         except Exception as e:
             logger.exception("Error fetching avatar thumbnail for %s: %s", user_id, e)
         return None
 
-    '''# === BACKGROUND TASK: GAME UPDATE MONITOR ===
-    @tasks.loop(minutes=5)
-    async def monitor_game_updates(self):
-        async with aiohttp.ClientSession() as session:
-            try:
-                cursor = games_collection.find({})
-                tracked_docs = await cursor.to_list(length=None)
-            
-                if not tracked_docs:
-                    return
-
-                for doc in tracked_docs:
-                    place_id = doc["place_id"]
-                    guild_id = doc["guild_id"]
-                    channel_id = doc["channel_id"]
-                    stored_last_updated = doc.get("last_updated", 0)
-
-                    url = f"https://games.roblox.com/v1/games/multiget-place-details?placeIds={place_id}"
-                    async with session.get(url, timeout=10) as res:
-                        if res.status == 200:
-                            data = await res.json()
-                            if data and isinstance(data, list) and len(data) > 0:
-                                place_info = data[0]
-                                game_name = place_info.get("name", "Unknown Game")
-                                updated_iso = place_info.get("updated")
-                            
-                                if not updated_iso:
-                                    continue
-
-                                from datetime import datetime
-                                dt = datetime.fromisoformat(updated_iso.replace("Z", "+00:00"))
-                                current_timestamp = int(dt.timestamp())
-
-                                # If it's the first time checking or database is empty, initialize it
-                                if stored_last_updated == 0:
-                                    await games_collection.update_one(
-                                        {"place_id": place_id, "guild_id": guild_id},
-                                        {"$set": {"last_updated": current_timestamp, "previous_updated": current_timestamp, "game_name": game_name}}
-                                    )
-                                elif current_timestamp > stored_last_updated:
-                                    # Update detected! Use stored_last_updated as the previous time
-                                    prev_timestamp = stored_last_updated
-                                    new_timestamp = current_timestamp
-
-                                    await games_collection.update_one(
-                                        {"place_id": place_id, "guild_id": guild_id},
-                                        {"$set": {"last_updated": new_timestamp, "previous_updated": prev_timestamp, "game_name": game_name}}
-                                    )
-
-                                    message_content = (
-                                        f"🚨 PLACE UPDATED - {game_name}\n"
-                                        f"Game Info\n"
-                                        f"`Game Name:` {game_name}\n"
-                                        f"[Game Link](https://roblox.com/games/{place_id}/)\n"
-                                        f"Update Info\n"
-                                        f"`Last updated -` (<t:{new_timestamp}:R>) <t:{new_timestamp}:f>\n"
-                                        f"`Recently updated -` (<t:{prev_timestamp}:R>) <t:{prev_timestamp}:f>"
-                                    )
-
-                                    channel = self.get_channel(channel_id)
-                                    if not channel:
-                                        try:
-                                            channel = await self.fetch_channel(channel_id)
-                                        except Exception:
-                                            continue
-                                    
-                                    try:
-                                        await channel.send(message_content)
-                                    except Exception as e:
-                                        logger.exception("Failed to send update alert: %s", e)
-
-                    await asyncio.sleep(2.0)
-            except Exception as e:
-                logger.exception("Error in monitor_game_updates loop: %s", e) '''
-
-    # === BACKGROUND TASK: GAME UPDATE MONITOR (DEBUG MODE) ===
     @tasks.loop(minutes=5)
     async def monitor_game_updates(self):
         logger.info("--- Starting Game Update Check ---")
@@ -332,7 +223,6 @@ class RobloxTrackerBot(commands.Bot):
                 tracked_docs = await cursor.to_list(length=None)
             
                 if not tracked_docs:
-                    logger.info("No games found in database to track.")
                     return
 
                 for doc in tracked_docs:
@@ -341,29 +231,22 @@ class RobloxTrackerBot(commands.Bot):
                     channel_id = doc.get("channel_id")
                     stored_last_updated = doc.get("last_updated", 0)
 
-                    logger.info(f"Checking Place ID: {place_id} | Stored DB Time: {stored_last_updated} | Channel ID: {channel_id}")
-
-                    # Step 1: Place ID to Universe ID
                     universe_url = f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
                     async with session.get(universe_url, cookies=cookies, timeout=10) as uni_res:
                         if uni_res.status != 200:
-                            logger.error(f"Universe API Error. Status code: {uni_res.status}")
                             continue
                         
                         uni_data = await uni_res.json()
                         universe_id = uni_data.get("universeId")
 
                         if not universe_id:
-                            logger.error(f"Failed to get Universe ID for Place {place_id}")
                             continue
 
-                    # Step 2: Universe ID to Game Details
                     games_url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
                     async with session.get(games_url, cookies=cookies, timeout=10) as res:
                         if res.status == 200:
                             data = await res.json()
                             if not data.get("data") or len(data["data"]) == 0:
-                                logger.info(f"Roblox API returned EMPTY data for Universe {universe_id}.")
                                 continue
 
                             place_info = data["data"][0]
@@ -371,23 +254,18 @@ class RobloxTrackerBot(commands.Bot):
                             updated_iso = place_info.get("updated")
                         
                             if not updated_iso:
-                                logger.info(f"No 'updated' timestamp found in API response for {game_name}")
                                 continue
 
                             from datetime import datetime
                             dt = datetime.fromisoformat(updated_iso.replace("Z", "+00:00"))
                             current_timestamp = int(dt.timestamp())
 
-                            logger.info(f"API Time for {game_name}: {current_timestamp}")
-
                             if stored_last_updated == 0:
-                                logger.info("Initializing game (0 detected).")
                                 await games_collection.update_one(
                                     {"place_id": place_id, "guild_id": guild_id},
                                     {"$set": {"last_updated": current_timestamp, "previous_updated": current_timestamp, "game_name": game_name}}
                                 )
                             elif current_timestamp > stored_last_updated:
-                                logger.info(f"UPDATE DETECTED! {current_timestamp} > {stored_last_updated}")
                                 prev_timestamp = stored_last_updated
                                 new_timestamp = current_timestamp
 
@@ -401,7 +279,7 @@ class RobloxTrackerBot(commands.Bot):
                                     try:
                                         channel = await self.fetch_channel(int(channel_id))
                                     except Exception as e:
-                                        logger.error(f"CRITICAL ERROR: Could not find or fetch Discord channel {channel_id}. Error: {e}")
+                                        logger.error(f"Could not find Discord channel {channel_id}: {e}")
                                         continue
                                 
                                 message_content = (
@@ -415,15 +293,9 @@ class RobloxTrackerBot(commands.Bot):
                                 )
 
                                 try:
-                                    logger.info(f"Attempting to send message to channel {channel.name}...")
                                     await channel.send(message_content)
-                                    logger.info("Message sent successfully!")
                                 except Exception as e:
                                     logger.error(f"Failed to send discord message: {e}")
-                            else:
-                                logger.info("No new update. Timestamps match.")
-                        else:
-                            logger.error(f"API Error. Status code: {res.status}")
 
                     await asyncio.sleep(2.0)
             except Exception as e:
@@ -433,7 +305,7 @@ class RobloxTrackerBot(commands.Bot):
     async def before_game_updates(self):
         await self.wait_until_ready()
     
-    @tasks.loop(seconds=90)  # Increased from 60s to 90s to naturally lower request frequency
+    @tasks.loop(seconds=90)
     async def monitor_loop(self):
         async with aiohttp.ClientSession() as session:
             try:
@@ -463,7 +335,6 @@ class RobloxTrackerBot(commands.Bot):
                                     active_place = current_place_id or root_place_id
                                     was_playing = last_played_place.get(user_id) is not None
 
-                                    # presence_type 2 means "In Game"
                                     if presence_type == 2 and active_place:
                                         game_name = await self.get_game_name(session, active_place)
 
@@ -496,11 +367,7 @@ class RobloxTrackerBot(commands.Bot):
                                                     if not channel:
                                                         try:
                                                             channel = await self.fetch_channel(channel_id)
-                                                        except discord.NotFound:
-                                                            logger.warning("Channel %s not found for guild %s; skipping", channel_id, server_cfg.get("guild_id"))
-                                                            continue
-                                                        except Exception as e:
-                                                            logger.exception("Error fetching channel %s: %s", channel_id, e)
+                                                        except Exception:
                                                             continue
 
                                                     faction = server_cfg.get("faction", "Unassigned")
@@ -523,11 +390,7 @@ class RobloxTrackerBot(commands.Bot):
                                                     ping_text = f"<@&{role_id}>! " if role_id else ""
                                                     try:
                                                         msg = await channel.send(content=f"{ping_text}Targeted player **{username}** is now active!", embed=embed)
-                                                    except discord.Forbidden:
-                                                        logger.warning("Missing permissions to send messages in channel %s (guild %s).", channel_id, server_cfg.get("guild_id"))
-                                                        continue
-                                                    except Exception as e:
-                                                        logger.exception("Failed to send online alert in channel %s: %s", channel_id, e)
+                                                    except Exception:
                                                         continue
 
                                                     if user_id not in active_alert_messages:
@@ -551,10 +414,9 @@ class RobloxTrackerBot(commands.Bot):
                                                         )
                                                         await msg.edit(embed=embed)
                                                     except Exception:
-                                                        logger.exception("Error updating duration message for guild %s", guild_id)
+                                                        pass
 
                                     else:
-                                        # User is not playing now but was playing before: finalize offline state
                                         if was_playing:
                                             if user_id in active_session_data and user_id in session_start_times:
                                                 duration_seconds = int(time.time() - session_start_times[user_id])
@@ -583,12 +445,10 @@ class RobloxTrackerBot(commands.Bot):
 
                                                             try:
                                                                 await msg.edit(content=f"Player **{s_data['username']}** is now offline.", embed=embed)
-                                                            except discord.Forbidden:
-                                                                logger.warning("Missing permissions to edit messages in guild %s", guild_id)
                                                             except Exception:
-                                                                logger.exception("Error editing final offline message for guild %s", guild_id)
+                                                                pass
                                                         except Exception:
-                                                            logger.exception("Error preparing final offline embed for guild %s", guild_id)
+                                                            pass
 
                                             last_played_place[user_id] = None
                                             session_start_times.pop(user_id, None)
@@ -597,7 +457,6 @@ class RobloxTrackerBot(commands.Bot):
                                                 active_alert_messages.pop(user_id, None)
 
                             elif response.status == 429:
-                                # REPLACE THIS PART to respect Roblox's dynamic backoff
                                 retry_after = 180
                                 try:
                                     data = await response.json()
@@ -606,27 +465,11 @@ class RobloxTrackerBot(commands.Bot):
                                     pass
                                 logger.warning(f"Hit Roblox presence API rate limit (429). Pausing loop for {retry_after}s...")
                                 await asyncio.sleep(float(retry_after))
-                            else:
-                                logger.debug("Unexpected presence API status %s for user %s", response.status, user_id)
-                    except asyncio.TimeoutError:
-                        logger.warning("Timeout when checking presence for user %s", user_id)
-                    except Exception:
-                        logger.exception("Unexpected error when checking presence for user %s", user_id)
+                    except Exception as e:
+                        logger.exception("Unexpected error when checking presence for user %s: %s", user_id, e)
 
-            except discord.HTTPException as he:
-                try:
-                    status = getattr(he, "status", None)
-                    if status == 429:
-                        logger.error("Encountered Discord 429 Rate Limit. Backing off.")
-                        await asyncio.sleep(300)
-                    else:
-                        logger.exception("Discord HTTP Exception in monitor loop: %s", he)
-                except Exception:
-                    logger.exception("Error handling discord HTTP exception: %s", he)
             except Exception as e:
                 logger.exception("Error in monitor loop: %s", e)
-
-bot = RobloxTrackerBot()
 
 # === CUSTOM CHECK FOR BOT MANAGER ROLE ===
 def is_bot_manager():
@@ -656,8 +499,8 @@ def is_bot_manager():
         return False
     return app_commands.check(predicate)
 
-# === NEW COMMAND: SET MANAGER ROLE ===
-@bot.tree.command(name="set_manager_role", description="Set the required role to manage tracked users in this server")
+# === SLASH COMMAND DEFINITIONS ===
+@app_commands.command(name="set_manager_role", description="Set the required role to manage tracked users in this server")
 @app_commands.describe(role="The role allowed to add/remove tracked users")
 @app_commands.checks.has_permissions(administrator=True)
 async def set_manager_role(interaction: discord.Interaction, role: discord.Role):
@@ -677,8 +520,7 @@ async def set_manager_role_error(interaction: discord.Interaction, error):
     if isinstance(error, app_commands.MissingPermissions):
         await interaction.response.send_message("⚠️ You need **Administrator** permissions to set the bot manager role.", ephemeral=True)
 
-# === SLASH COMMANDS ===
-@bot.tree.command(name="track_game_updates", description="Track a Roblox game for update notifications in this server")
+@app_commands.command(name="track_game_updates", description="Track a Roblox game for update notifications in this server")
 @app_commands.describe(
     place_id="The numeric Roblox Place ID",
     channel="The Discord channel to send update alerts to"
@@ -689,10 +531,9 @@ async def track_game_updates(interaction: discord.Interaction, place_id: int, ch
     cookies = {".ROBLOSECURITY": os.getenv("ROBLOSECURITY")} if os.getenv("ROBLOSECURITY") else {}
 
     async with aiohttp.ClientSession() as session:
-        game_name = await bot.get_game_name(session, place_id)
+        game_name = await interaction.client.get_game_name(session, place_id)
         current_timestamp = int(time.time())
         
-        # Step 1: Place ID to Universe ID
         universe_url = f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
         async with session.get(universe_url, cookies=cookies, timeout=10) as uni_res:
             if uni_res.status == 200:
@@ -700,7 +541,6 @@ async def track_game_updates(interaction: discord.Interaction, place_id: int, ch
                 universe_id = uni_data.get("universeId")
                 
                 if universe_id:
-                    # Step 2: Get initial update timestamp
                     games_url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
                     async with session.get(games_url, cookies=cookies, timeout=10) as res:
                         if res.status == 200:
@@ -712,7 +552,6 @@ async def track_game_updates(interaction: discord.Interaction, place_id: int, ch
                                     dt = datetime.fromisoformat(updated_iso.replace("Z", "+00:00"))
                                     current_timestamp = int(dt.timestamp())
 
-    # Save to MongoDB
     await games_collection.update_one(
         {"place_id": place_id, "guild_id": interaction.guild_id},
         {
@@ -730,12 +569,11 @@ async def track_game_updates(interaction: discord.Interaction, place_id: int, ch
         f"✅ Now tracking updates for **{game_name}** (`{place_id}`) in {channel.mention}.",
         ephemeral=True
     )
-    
-@bot.tree.command(name="list_tracked_games", description="View Roblox games being tracked for updates in THIS server")
+
+@app_commands.command(name="list_tracked_games", description="View Roblox games being tracked for updates in THIS server")
 async def list_tracked_games(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
-    # Fetch tracked games for this specific guild from MongoDB
     cursor = games_collection.find({"guild_id": interaction.guild_id})
     tracked_games = await cursor.to_list(length=None)
 
@@ -765,7 +603,7 @@ async def list_tracked_games(interaction: discord.Interaction):
     )
     await interaction.followup.send(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="untrack_game_updates", description="Stop tracking a Roblox game's updates in this server")
+@app_commands.command(name="untrack_game_updates", description="Stop tracking a Roblox game's updates in this server")
 @app_commands.describe(place_id="The numeric Roblox Place ID to remove")
 @is_bot_manager()
 async def untrack_game_updates(interaction: discord.Interaction, place_id: int):
@@ -775,7 +613,7 @@ async def untrack_game_updates(interaction: discord.Interaction, place_id: int):
     else:
         await interaction.response.send_message(f"⚠️ Place ID `{place_id}` was not being tracked in this server.", ephemeral=True)
 
-@bot.tree.command(name="test_alert", description="Force an update alert test")
+@app_commands.command(name="test_alert", description="Force an update alert test")
 @is_bot_manager()
 async def test_alert(interaction: discord.Interaction, channel: discord.TextChannel):
     await interaction.response.send_message("Sending test...", ephemeral=True)
@@ -797,7 +635,7 @@ async def test_alert(interaction: discord.Interaction, channel: discord.TextChan
     except Exception as e:
         await interaction.followup.send(f"Failed to send: {e}", ephemeral=True)
 
-@bot.tree.command(name="track", description="Add or update a Roblox user to track for THIS server")
+@app_commands.command(name="track", description="Add or update a Roblox user to track for THIS server")
 @app_commands.describe(
     user_id="The numeric Roblox User ID",
     channel="The Discord channel to send alerts to",
@@ -819,13 +657,12 @@ async def track_user(
     game_name = "Any Game"
     if place_id:
         async with aiohttp.ClientSession() as session:
-            game_name = await bot.get_game_name(session, place_id)
+            game_name = await interaction.client.get_game_name(session, place_id)
 
     if user_id not in TRACKED_USERS:
         TRACKED_USERS[user_id] = []
         last_played_place[user_id] = None
 
-    # Ensure only one config per guild per user
     TRACKED_USERS[user_id] = [cfg for cfg in TRACKED_USERS[user_id] if cfg.get("guild_id") != interaction.guild_id]
 
     TRACKED_USERS[user_id].append({
@@ -853,7 +690,7 @@ async def track_user(
         ephemeral=True
     )
 
-@bot.tree.command(name="untrack", description="Stop tracking a Roblox user in THIS server")
+@app_commands.command(name="untrack", description="Stop tracking a Roblox user in THIS server")
 @app_commands.describe(user_id="The numeric Roblox User ID to remove")
 @is_bot_manager()
 async def untrack_user(interaction: discord.Interaction, user_id: int):
@@ -875,7 +712,7 @@ async def untrack_user(interaction: discord.Interaction, user_id: int):
     else:
         await interaction.response.send_message(f"⚠️ User ID `{user_id}` is not currently being tracked at all.", ephemeral=True)
 
-@bot.tree.command(name="list_tracked", description="View tracked users for THIS server")
+@app_commands.command(name="list_tracked", description="View tracked users for THIS server")
 async def list_tracked(interaction: discord.Interaction):
     if not TRACKED_USERS:
         await interaction.response.send_message("No users are currently being tracked.", ephemeral=True)
@@ -888,7 +725,7 @@ async def list_tracked(interaction: discord.Interaction):
         for uid, servers_list in TRACKED_USERS.items():
             for cfg in servers_list:
                 if cfg.get("guild_id") == interaction.guild_id:
-                    username = await bot.get_username(session, uid)
+                    username = await interaction.client.get_username(session, uid)
                     game_name = cfg.get("game_name", "Any Game")
                     ch_id = cfg.get("channel_id")
                     r_id = cfg.get("role_id")
@@ -907,8 +744,20 @@ async def list_tracked(interaction: discord.Interaction):
     else:
         await interaction.followup.send("No users are currently being tracked in this specific server.", ephemeral=True)
 
-logging.basicConfig(level=logging.INFO)
+# === FACTORY FUNCTION ===
+def create_bot():
+    bot_instance = RobloxTrackerBot()
+    bot_instance.tree.add_command(set_manager_role)
+    bot_instance.tree.add_command(track_game_updates)
+    bot_instance.tree.add_command(list_tracked_games)
+    bot_instance.tree.add_command(untrack_game_updates)
+    bot_instance.tree.add_command(test_alert)
+    bot_instance.tree.add_command(track_user)
+    bot_instance.tree.add_command(untrack_user)
+    bot_instance.tree.add_command(list_tracked)
+    return bot_instance
 
+# === ENTRYPOINT ===
 if __name__ == "__main__":
     Thread(target=run_web_server, daemon=True).start()
 
@@ -918,6 +767,7 @@ if __name__ == "__main__":
     for attempt in range(1, max_retries + 1):
         try:
             logging.info(f"Connecting to Discord (Attempt {attempt}/{max_retries})...")
+            bot = create_bot()
             bot.run(DISCORD_TOKEN)
             break  # Exit loop if bot shuts down cleanly
         except HTTPException as e:
@@ -932,4 +782,5 @@ if __name__ == "__main__":
                 raise e
         except Exception as e:
             logging.error(f"Unexpected bot crash: {e}")
-            break
+            time.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 300)
