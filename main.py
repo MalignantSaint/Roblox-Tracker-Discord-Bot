@@ -907,23 +907,29 @@ async def list_tracked(interaction: discord.Interaction):
     else:
         await interaction.followup.send("No users are currently being tracked in this specific server.", ephemeral=True)
 
+logging.basicConfig(level=logging.INFO)
+
 if __name__ == "__main__":
     Thread(target=run_web_server, daemon=True).start()
     bot.run(DISCORD_TOKEN)
-    max_retries = 5
-    retry_delay = 60  # seconds
+    max_retries = 10
+    retry_delay = 30  # Initial wait time in seconds
 
     for attempt in range(1, max_retries + 1):
         try:
+            logging.info(f"Connecting to Discord (Attempt {attempt}/{max_retries})...")
             bot.run(DISCORD_TOKEN)
-            break
+            break  # If bot closes cleanly, exit loop
         except HTTPException as e:
             if e.status == 429:
-                print(f"[429 Rate Limit] Cloudflare blocked login (Attempt {attempt}/{max_retries}). Retrying in {retry_delay}s...")
+                logging.warning(
+                    f"Cloudflare/Discord rate-limited the IP. Waiting {retry_delay}s before retrying..."
+                )
                 time.sleep(retry_delay)
-                retry_delay *= 2  # Exponential backoff
+                retry_delay = min(retry_delay * 2, 300)  # Cap max wait at 5 minutes
             else:
+                logging.error(f"HTTPException encountered: {e}")
                 raise e
         except Exception as e:
-            print(f"Unexpected shutdown error: {e}")
+            logging.error(f"Unexpected bot crash: {e}")
             break
