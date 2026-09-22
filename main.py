@@ -911,7 +911,7 @@ logging.basicConfig(level=logging.INFO)
 
 if __name__ == "__main__":
     Thread(target=run_web_server, daemon=True).start()
-    bot.run(DISCORD_TOKEN)
+
     max_retries = 10
     retry_delay = 30  # Initial wait time in seconds
 
@@ -919,14 +919,14 @@ if __name__ == "__main__":
         try:
             logging.info(f"Connecting to Discord (Attempt {attempt}/{max_retries})...")
             bot.run(DISCORD_TOKEN)
-            break  # If bot closes cleanly, exit loop
+            break  # Exit loop if bot shuts down cleanly
         except HTTPException as e:
             if e.status == 429:
                 logging.warning(
-                    f"Cloudflare/Discord rate-limited the IP. Waiting {retry_delay}s before retrying..."
+                    f"Cloudflare/Discord rate-limited the IP (429). Waiting {retry_delay}s before retrying..."
                 )
                 time.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, 300)  # Cap max wait at 5 minutes
+                retry_delay = min(retry_delay * 2, 300)  # Cap wait time at 5 minutes
             else:
                 logging.error(f"HTTPException encountered: {e}")
                 raise e
